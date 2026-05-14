@@ -1,154 +1,176 @@
-# Polymarket Trading Engine
+# 0DTE Options Scanner
 
-A high-speed binary-arbitrage trading engine for [Polymarket](https://polymarket.com), built on the official [`py-clob-client`](https://github.com/Polymarket/py-clob-client).
+> **Find undervalued zero-days-to-expiration (0DTE) options and get explicit, broker-ready trade instructions — all in a lite local web app.**
+
+Liquid US-listed underlyings (SPY, QQQ, IWM, DIA, …) now have option contracts that expire **today**. Their premiums move violently against time decay (theta) and tiny shifts in implied volatility, which means the bid/ask is occasionally mispriced relative to the rest of the chain. This tool finds those mispricings and tells you exactly what to do about them.
+
+> ⚠️ **Educational use only.** 0DTE options can lose 100% of premium in minutes. Always verify quotes in your broker before trading.
 
 ---
 
-## How Polymarket Works (and where the edge comes from)
+## How it works
 
-Every market on Polymarket is a **binary prediction market** with two outcome tokens:
+1. **Fetch** — for each ticker, pull the 0DTE option chain (or the nearest expiry within 3 days) from Yahoo Finance via [`yfinance`](https://github.com/ranaroussi/yfinance).
+2. **Anchor** — compute a chain-wide **reference IV** as the volume-weighted IV of liquid, near-the-money contracts. This is the market's own consensus for *today*'s realized vol.
+3. **Reprice** — for every contract, compute the Black-Scholes fair value at the reference IV and compare it to the live ask.
+4. **Filter** — drop anything with thin liquidity, wide spreads, or less than a 5% edge.
+5. **Rank** — composite score blends edge %, liquidity, and ATM-ness.
+6. **Plan** — for each surviving contract, build a trade plan: position size (risk-budgeted), limit price, breakeven, take-profit, stop-loss, and a numbered execution checklist.
 
-| Token | Settles at |
-|-------|-----------|
-| **YES** | **$1.00** if the event resolves YES, **$0** otherwise |
-| **NO**  | **$1.00** if the event resolves NO,  **$0** otherwise |
-
-In an efficient market the prices must satisfy:
-
-```
-price(YES) + price(NO) = 1.00
-```
-
-When this equality breaks down, **risk-free profit** exists:
-
-| Condition | Action | Profit |
-|-----------|--------|--------|
-| `ask(YES) + ask(NO) < 1.00` | **BUY BOTH** legs | `1.00 − (ask_YES + ask_NO)` |
-| `bid(YES) + bid(NO) > 1.00` | **SELL BOTH** legs | `(bid_YES + bid_NO) − 1.00` |
-
-This is classic binary-market arbitrage — no directional bet, no market risk, guaranteed by contract settlement.
+A small **React + Vite** UI consumes the FastAPI backend, lets you tune filters, and shows the trade plan side-by-side with a sortable table of opportunities.
 
 ---
 
 ## Architecture
 
 ```
-main.py
-└── TradingEngine (engine/trading_engine.py)
-    ├── MarketScanner      — async, batched order-book discovery
-    ├── OpportunityDetector — classifies each market as BUY_BOTH / SELL_BOTH / NO_EDGE
-    ├── TradeExecutor       — concurrent FOK orders for both legs
-    └── PositionManager     — cap enforcement, one-legged risk tracking, P&L
+┌────────────────────────────┐    HTTP /api    ┌──────────────────────┐
+│  React UI (Vite, port 5173)│ ──────────────► │ FastAPI (port 8000)  │
+│  src/App.jsx               │                 │ backend/main.py      │
+│  src/components/...        │                 │   ├ scanner.py       │
+│                            │                 │   ├ pricing.py (BS)  │
+│                            │                 │   └ models.py        │
+└────────────────────────────┘                 └──────────┬───────────┘
+                                                          │
+                                                          ▼
+                                                  yfinance → Yahoo
 ```
-
-### Signal types
-
-| Signal | Meaning | Action |
-|--------|---------|--------|
-| `BUY_BOTH`    | Combined ask price < $1.00 | Buy YES + buy NO (FOK market orders) |
-| `SELL_BOTH`   | Combined bid price > $1.00 | Sell YES + sell NO (FOK market orders) |
-| `EQUAL_MONEY` | Both legs ≈ $0.50          | No edge; logged only |
-| `NO_EDGE`     | Efficiently priced         | Skip |
-
-### Speed optimisations
-- All order-book fetches for a batch of markets run **concurrently** via `aiohttp`.
-- Both trade legs post **simultaneously** via `asyncio.gather`.
-- Blocking CLOB calls are offloaded to a **thread-pool executor** to avoid stalling the event loop.
-- A persistent HTTP session with connection pooling eliminates TCP handshake overhead.
 
 ---
 
-## Quick Start
+## Quick start
 
-### 1. Install dependencies
+### 1. Backend
 
 ```bash
 pip install -r requirements.txt
+uvicorn backend.main:app --reload --port 8000
 ```
 
-### 2. Configure credentials
+The API exposes:
+
+- `GET /api/health`
+- `GET /api/opportunities?tickers=SPY,QQQ&account_size=5000&risk_per_trade_pct=0.02&max_results=50`
+
+Responses are cached for 30 seconds. Append `&nocache=true` to bypass.
+
+### 2. Frontend
 
 ```bash
-cp .env.example .env
-# Edit .env — fill in PRIVATE_KEY, FUNDER_ADDRESS
+cd frontend
+npm install
+npm run dev
 ```
 
-> **DRY_RUN=true** is the default.  No real orders are placed until you explicitly set `DRY_RUN=false`.
+Open <http://localhost:5173>. The Vite dev server proxies `/api/*` to the backend.
 
-### 3. Run a single scan (no trading)
-
-```bash
-python main.py --scan
-```
-
-This fetches live order books across all active markets and prints any arbitrage opportunities it finds — completely read-only.
-
-### 4. Start the trading loop
+For a static build:
 
 ```bash
-python main.py
-```
-
-The engine runs continuously, scanning, detecting, and (in live mode) executing trades.  Press **Ctrl+C** to stop.
-
-### 5. Force dry-run from CLI
-
-```bash
-python main.py --dry-run
+npm run build      # output in frontend/dist/
+npm run preview    # serve the build on :4173
 ```
 
 ---
 
-## Configuration reference
+## API response shape
 
-All settings live in `.env` (see `.env.example`):
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PRIVATE_KEY` | *(required)* | EVM wallet private key |
-| `FUNDER_ADDRESS` | *(required)* | Address holding USDC on Polymarket |
-| `CHAIN_ID` | `137` | `137` = Polygon Mainnet, `80002` = Amoy Testnet |
-| `SIGNATURE_TYPE` | `0` | `0` = EOA, `1` = Magic/Email, `2` = Proxy wallet |
-| `MAX_POSITION_SIZE_USDC` | `50` | Max USDC per trade leg |
-| `MIN_PROFIT_THRESHOLD` | `0.005` | Min net profit (0.5 ¢ per $) to fire a trade |
-| `MAX_OPEN_POSITIONS` | `10` | Cap on simultaneous open positions |
-| `SCAN_INTERVAL_SECONDS` | `2` | Seconds between market scans |
-| `SCAN_BATCH_SIZE` | `20` | Parallel order-book requests per batch |
-| `DRY_RUN` | `true` | `false` to enable live trading |
-| `LOG_LEVEL` | `INFO` | Python logging level |
-| `LOG_FILE` | `trading_engine.log` | Rotating log file path |
+```jsonc
+{
+  "generated_at": "2026-05-14T14:30:00Z",
+  "risk_free_rate": 0.045,
+  "tickers_scanned": ["SPY", "QQQ"],
+  "count": 7,
+  "results": [
+    {
+      "opportunity": {
+        "symbol": "SPY260514C00525000",
+        "underlying": "SPY",
+        "strike": 525.0,
+        "option_type": "call",
+        "bid": 0.42, "ask": 0.45, "mid": 0.435,
+        "fair_value": 0.58,
+        "edge_pct": 0.288,
+        "delta": 0.41,
+        "minutes_to_expiry": 95,
+        "score": 31.4
+      },
+      "plan": {
+        "action": "BUY_TO_OPEN",
+        "side_human": "BUY 2 SPY 2026-05-14 $525 CALL",
+        "limit_price": 0.45,
+        "suggested_contracts": 2,
+        "total_cost_usd": 90.0,
+        "max_loss_usd": 90.0,
+        "breakeven_underlying_price": 525.45,
+        "target_exit_price": 0.52,
+        "target_profit_usd": 14.0,
+        "stop_loss_price": 0.23,
+        "stop_loss_usd": 44.0,
+        "rationale": "Black-Scholes fair value …",
+        "steps": ["1. In your broker …", "2. Select the …", "…"]
+      }
+    }
+  ],
+  "notes": ["SPY: spot=$524.80, expiry=2026-05-14, ref_IV=14.3%, mins_left=95"]
+}
+```
 
 ---
 
-## Risks & caveats
+## Configuration knobs
 
-> **This software is for educational purposes. Automated trading involves real financial risk. Use at your own risk.**
+All exposed both as query parameters and as UI form fields:
 
-1. **One-legged fills** — If one leg fills and the other is rejected, you hold directional exposure.  The `PositionManager` flags these as `ONE_LEGGED`; you must resolve them manually.
-2. **Taker fees** — Polymarket charges ~0.1 % on market orders.  Set `MIN_PROFIT_THRESHOLD` above `0.002` (0.2 %) to stay profitable after fees.
-3. **Gas costs** — Transactions settle on Polygon; gas costs are negligible but non-zero.  Account for them in your threshold.
-4. **Slippage** — FOK orders are all-or-nothing.  If the top-of-book liquidity is insufficient, the order is rejected.
-5. **Market resolution** — Positions that are not fully hedged before resolution may result in a loss.
-6. **US geoblocking** — Polymarket is geoblocked in the United States.  Ensure you comply with local laws.
-7. **Token allowances** — If using an EOA/MetaMask wallet, you must set USDC and conditional-token allowances before trading.  See the [py-clob-client README](https://github.com/Polymarket/py-clob-client#important-token-allowances-for-metamaskeoausers) for the one-time setup script.
+| Parameter | Default | Description |
+|---|---|---|
+| `tickers` | `SPY,QQQ,IWM,DIA,SPX,NDX` | Comma-separated underlyings to scan |
+| `account_size` | `5000` (USD) | Used to size positions |
+| `risk_per_trade_pct` | `0.02` | Max fraction of account to risk per contract |
+| `max_results` | `50` | Cap on returned opportunities |
+| `risk_free_rate` | `0.045` | Annualized risk-free rate for BS pricing |
+
+Internal liquidity filters (in `backend/scanner.py`) — tune to taste:
+
+- `MIN_VOLUME = 50`
+- `MIN_OPEN_INTEREST = 100`
+- `MIN_BID = 0.05`
+- `MAX_REL_SPREAD = 0.25`
+- Minimum edge: 5%
 
 ---
 
 ## Project layout
 
 ```
-polymarket-trading-engine/
-├── .env.example              ← copy to .env and fill in secrets
+.
+├── backend/
+│   ├── __init__.py
+│   ├── main.py        ← FastAPI app + CORS + 30s cache
+│   ├── scanner.py     ← chain fetch, reference-IV calc, edge ranking, trade plan
+│   ├── pricing.py     ← Black-Scholes price, IV (Brent), Greeks
+│   └── models.py      ← Pydantic schemas (Opportunity, TradePlan, ScanResponse)
+├── frontend/
+│   ├── package.json
+│   ├── vite.config.js
+│   ├── index.html
+│   └── src/
+│       ├── main.jsx
+│       ├── App.jsx
+│       ├── api.js
+│       ├── styles.css
+│       └── components/
+│           ├── OpportunityTable.jsx
+│           └── TradeDetail.jsx
 ├── requirements.txt
-├── main.py                   ← entry point
-└── engine/
-    ├── __init__.py
-    ├── config.py             ← env-var configuration
-    ├── logger_setup.py       ← colourised console + rotating file logs
-    ├── client_manager.py     ← ClobClient singleton
-    ├── market_scanner.py     ← async market + order-book discovery
-    ├── opportunity_detector.py ← BUY_BOTH / SELL_BOTH signal classification
-    ├── trade_executor.py     ← concurrent dual-leg order execution
-    ├── position_manager.py   ← position cap, one-legged tracking, P&L
-    └── trading_engine.py     ← main trading loop
+└── README.md
 ```
+
+---
+
+## Caveats
+
+- **Yahoo data is delayed** (~15 min for some venues). For live trading, swap `yfinance` for a real-time options feed (Polygon.io, Tradier, IBKR, CBOE) — the swap is contained to `_build_chain_context()` in `backend/scanner.py`.
+- **Black-Scholes for American options** — SPY/QQQ etc. weeklies are American. For 0DTE near-the-money calls/puts on non-dividend names the difference is negligible; for deep-ITM puts and dividend-heavy names you may want a binomial tree.
+- **The "fair value" is a relative anchor**, not an absolute truth. We measure deviations *from the rest of the same chain*, which catches stale quotes and momentary dislocations — not directional alpha.
+- **No order routing.** This tool deliberately stops at "tell me the trade." Sending orders is your responsibility (and your broker's).
