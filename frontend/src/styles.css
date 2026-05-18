@@ -237,3 +237,339 @@ tr.selected td { background: var(--accent-dim); }
 }
 .notes summary { cursor: pointer; color: var(--fg); }
 .notes ul { margin: 8px 0 0 0; padding-left: 20px; }
+
+/* ── Rejection Insights Widget ─────────────────────────── */
+.rej-widget {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 16px;
+  overflow: hidden;
+}
+.rej-widget-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  cursor: pointer;
+  user-select: none;
+  border-bottom: 1px solid var(--border);
+}
+.rej-widget-header:hover { background: var(--panel-2); }
+.rej-widget-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+.rej-widget-subtitle {
+  font-size: 12px;
+  color: var(--muted);
+}
+.rej-collapse-btn {
+  font-size: 12px;
+  color: var(--link);
+  white-space: nowrap;
+}
+.rej-widget-body {
+  padding: 16px;
+}
+
+/* overview bar */
+.rej-overview { margin-bottom: 16px; }
+.rej-overview-bar {
+  display: flex;
+  height: 24px;
+  border-radius: 6px;
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 24px;
+  text-align: center;
+}
+.rej-overview-pass {
+  background: var(--accent);
+  color: #04220f;
+  min-width: 0;
+}
+.rej-overview-fail {
+  background: #4c1d24;
+  color: #fca5a5;
+  min-width: 0;
+}
+.rej-overview-hint {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+/* reason cards */
+.rej-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.rej-card {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.rej-card-header {
+  padding: 10px 12px;
+  cursor: pointer;
+  user-select: none;
+}
+.rej-card-header:hover { background: rgba(255,255,255,0.03); }
+.rej-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.rej-icon { font-size: 16px; }
+.rej-count {
+  font-family: monospace;
+  font-size: 14px;
+  margin-left: auto;
+}
+.rej-expand {
+  font-size: 11px;
+  color: var(--link);
+  margin-top: 4px;
+  display: inline-block;
+}
+
+/* progress bar inside cards */
+.rej-bar-bg {
+  height: 4px;
+  background: rgba(255,255,255,0.06);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-bottom: 4px;
+}
+.rej-bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+/* educational content */
+.rej-card-body {
+  padding: 0 12px 12px;
+}
+.rej-edu {
+  background: var(--panel);
+  border-left: 3px solid var(--link);
+  padding: 10px 14px;
+  border-radius: 4px;
+  margin-bottom: 10px;
+}
+.rej-edu-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--link);
+  margin-bottom: 6px;
+}
+.rej-edu-body {
+  font-size: 12px;
+  color: var(--fg);
+  line-height: 1.6;
+  white-space: pre-line;
+}
+
+/* sample rejected contracts */
+.rej-samples { margin-top: 8px; }
+.rej-samples-title {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 6px;
+}
+.rej-sample {
+  border-top: 1px solid var(--border);
+}
+.rej-sample-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.rej-sample-header:hover { background: rgba(255,255,255,0.03); }
+.rej-sample-sym {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.rej-sample-toggle {
+  color: var(--muted);
+  font-size: 10px;
+}
+.rej-sample-body {
+  padding: 4px 8px 8px;
+}
+.rej-sample-detail {
+  font-size: 12px;
+  color: var(--warn);
+  line-height: 1.4;
+  margin-bottom: 4px;
+}
+.rej-sample-data {
+  font-size: 11px;
+  font-family: monospace;
+  color: var(--muted);
+}
+
+/* glossary */
+.rej-glossary {
+  margin-top: 8px;
+}
+.rej-glossary details {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 14px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.rej-glossary summary {
+  cursor: pointer;
+  color: var(--fg);
+  font-weight: 600;
+  font-size: 13px;
+}
+.rej-glossary-grid {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 6px 12px;
+  margin-top: 10px;
+  line-height: 1.5;
+}
+.rej-glossary-grid strong { color: var(--fg); }
+
+/* ── Coaching Panel (inline in table) ──────────────────── */
+.action-pill {
+  display: inline-block;
+  background: var(--accent);
+  color: #04220f;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.expand-arrow {
+  color: var(--muted);
+  font-size: 10px;
+  text-align: center;
+  width: 30px;
+}
+tr.expanded-parent td {
+  border-bottom: none;
+}
+tr.coaching-row td {
+  padding: 0;
+  background: var(--panel-2);
+}
+tr.coaching-row:hover td {
+  background: var(--panel-2);
+}
+.coaching-panel {
+  padding: 16px 20px;
+  border-left: 3px solid var(--accent);
+  animation: coachSlide 0.2s ease-out;
+}
+@keyframes coachSlide {
+  from { opacity: 0; max-height: 0; }
+  to   { opacity: 1; max-height: 800px; }
+}
+.coaching-badges {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.coaching-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 99px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.coaching-badge.urgency-high   { background: #4c1d24; color: #fca5a5; }
+.coaching-badge.urgency-medium { background: #422006; color: #fde68a; }
+.coaching-badge.urgency-low    { background: #14532d; color: #86efac; }
+.coaching-badge.confidence-strong      { background: #14532d; color: #86efac; }
+.coaching-badge.confidence-moderate    { background: #1e3a5f; color: #93c5fd; }
+.coaching-badge.confidence-speculative { background: #422006; color: #fde68a; }
+
+.coaching-section {
+  margin-bottom: 12px;
+}
+.coaching-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.coaching-action-box {
+  background: var(--accent);
+  color: #04220f;
+  padding: 10px 14px;
+  border-radius: 6px;
+  font-weight: 800;
+  font-size: 16px;
+  text-align: center;
+}
+.coaching-text {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--fg);
+}
+.coaching-good {
+  border-left: 3px solid var(--accent);
+  padding-left: 10px;
+}
+.coaching-warn {
+  border-left: 3px solid var(--danger);
+  padding-left: 10px;
+}
+.coaching-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+@media (max-width: 900px) {
+  .coaching-columns { grid-template-columns: 1fr; }
+}
+.coaching-col {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+.coaching-watch {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.coaching-watch li {
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.coaching-watch li:last-child {
+  border-bottom: none;
+}

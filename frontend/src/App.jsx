@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { fetchOpportunities } from './api.js';
 import OpportunityTable from './components/OpportunityTable.jsx';
+import RejectionInsights from './components/RejectionInsights.jsx';
 import TradeDetail from './components/TradeDetail.jsx';
 
-const DEFAULT_TICKERS = 'SPY,QQQ,IWM,DIA';
+const DEFAULT_TICKERS = 'SP500';
 
 export default function App() {
   const [tickers, setTickers] = useState(DEFAULT_TICKERS);
@@ -26,24 +27,35 @@ export default function App() {
   const load = async (nocache = false) => {
     setLoading(true);
     setError(null);
-    try {
-      const json = await fetchOpportunities({
-        tickers,
-        account_size: accountSize,
-        risk_per_trade_pct: riskPct / 100,
-        max_results: maxResults,
-        nocache,
-      });
-      setData(json);
-      if (json.results?.length && (!selected ||
-          !json.results.find((r) => r.opportunity.symbol === selected.opportunity.symbol))) {
-        setSelected(json.results[0]);
+    const MAX_RETRIES = 3;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const json = await fetchOpportunities({
+          tickers,
+          account_size: accountSize,
+          risk_per_trade_pct: riskPct / 100,
+          max_results: maxResults,
+          nocache,
+        });
+        setData(json);
+        if (json.results?.length && (!selected ||
+            !json.results.find((r) => r.opportunity.symbol === selected.opportunity.symbol))) {
+          setSelected(json.results[0]);
+        }
+        setError(null);
+        break;
+      } catch (e) {
+        const isRetryable = /restart|unavailable|non-JSON|502|503/i.test(e.message);
+        if (isRetryable && attempt < MAX_RETRIES) {
+          const wait = 5 * (attempt + 1);
+          setError(`Connecting to backend — retry ${attempt + 1}/${MAX_RETRIES} in ${wait}s…`);
+          await new Promise((r) => setTimeout(r, wait * 1000));
+          continue;
+        }
+        setError(e.message);
       }
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
     }
+    setLoading(false);
   };
 
   useEffect(() => { load(false); /* on mount */ // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -72,7 +84,7 @@ export default function App() {
 
       <div className="controls">
         <label>Tickers
-          <input type="text" value={tickers} onChange={(e) => setTickers(e.target.value)} placeholder="SPY,QQQ,…" />
+          <input type="text" value={tickers} onChange={(e) => setTickers(e.target.value)} placeholder="SP500 or SPY,QQQ,…" />
         </label>
         <label>Account ($)
           <input type="number" min="100" step="100" value={accountSize}
@@ -121,6 +133,8 @@ export default function App() {
           </details>
         </div>
       ) : null}
+
+      <RejectionInsights rejectionSummary={data?.rejection_summary} />
 
       <div className="content">
         <OpportunityTable
