@@ -1,23 +1,35 @@
-// Thin API helper. The Vite dev server proxies /api → http://localhost:8000.
-export async function fetchOpportunities(params) {
-  const qs = new URLSearchParams();
-  if (params.tickers) qs.set('tickers', params.tickers);
-  if (params.account_size) qs.set('account_size', params.account_size);
-  if (params.risk_per_trade_pct) qs.set('risk_per_trade_pct', params.risk_per_trade_pct);
-  if (params.max_results) qs.set('max_results', params.max_results);
-  if (params.nocache === true) qs.set('nocache', 'true');
-  // SP500 scans can take several minutes; use AbortController with a generous timeout
+// Thin API helper. The Python backend is now only a data proxy: it returns the
+// raw Yahoo option chain (which a browser can't fetch directly because of CORS).
+// All pricing / scoring happens client-side in ./lib/scanner.js.
+//
+// In dev, the Vite server proxies /api → http://localhost:8000.
+// On Vercel, /api/* is rewritten to the Python serverless function (same origin).
+// Set VITE_API_BASE at build time to point the UI at a different backend.
+const API_BASE = (import.meta.env.VITE_API_BASE || '').replace(/\/$/, '');
+
+/**
+ * Fetch raw option chains for a list of tickers.
+ * @returns { generated_at, chains: [...], notes: [...] }
+ */
+export async function fetchChains(tickers, { nocache = false } = {}) {
+  const list = (tickers || []).map((t) => t.trim().toUpperCase()).filter(Boolean);
+  if (!list.length) return { generated_at: new Date().toISOString(), chains: [], notes: [] };
+
+  const qs = new URLSearchParams({ tickers: list.join(',') });
+  if (nocache) qs.set('nocache', 'true');
+
+  // A small watchlist resolves quickly, but cold starts + Yahoo throttling can
+  // add latency — give it a generous abort window.
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 600_000); // 10 min
+  const timeout = setTimeout(() => controller.abort(), 120_000);
   try {
-    const res = await fetch(`/api/opportunities?${qs.toString()}`, {
+    const res = await fetch(`${API_BASE}/api/chain?${qs.toString()}`, {
       signal: controller.signal,
     });
     const ct = res.headers.get('content-type') || '';
-    // Guard against proxy returning HTML (e.g. during backend reload)
     if (!ct.includes('application/json')) {
       throw new Error(
-        'Backend returned non-JSON response (it may be restarting). ' +
+        'Backend returned a non-JSON response (it may be starting up). ' +
         'Please wait a moment and try again.'
       );
     }
@@ -29,8 +41,8 @@ export async function fetchOpportunities(params) {
   } catch (e) {
     if (e.name === 'AbortError') {
       throw new Error(
-        'The scan is taking longer than expected. ' +
-        'SP500 scans can take up to 10 minutes — please try again.'
+        'The data request timed out. Live option data can be slow or ' +
+        'rate-limited — try again with fewer tickers.'
       );
     }
     throw e;

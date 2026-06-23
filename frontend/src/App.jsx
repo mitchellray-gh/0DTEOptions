@@ -1,65 +1,118 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { fetchOpportunities } from './api.js';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { fetchChains } from './api.js';
+import { scanChains } from './lib/scanner.js';
 import OpportunityTable from './components/OpportunityTable.jsx';
 import RejectionInsights from './components/RejectionInsights.jsx';
 import TradeDetail from './components/TradeDetail.jsx';
 
-const DEFAULT_TICKERS = 'SP500';
+const LS_WATCHLIST = 'zdte.watchlist';
+const LS_SETTINGS = 'zdte.settings';
+const DEFAULT_WATCHLIST = ['SPY', 'QQQ', 'IWM'];
+const DEFAULT_SETTINGS = { accountSize: 5000, riskPct: 2, minEdge: 5, type: 'all', maxResults: 50 };
+const TICKER_RE = /^[A-Z][A-Z.\-]{0,5}$/;
+
+function loadJSON(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) ?? fallback) : fallback;
+  } catch {
+    return fallback;
+  }
+}
 
 export default function App() {
-  const [tickers, setTickers] = useState(DEFAULT_TICKERS);
-  const [accountSize, setAccountSize] = useState(5000);
-  const [riskPct, setRiskPct] = useState(2);
-  const [maxResults, setMaxResults] = useState(50);
-
-  const [filters, setFilters] = useState({
-    minEdge: 5,        // %
-    minVolume: 50,
-    type: 'all',       // all / call / put
-    ticker: '',
+  const [watchlist, setWatchlist] = useState(() => {
+    const wl = loadJSON(LS_WATCHLIST, DEFAULT_WATCHLIST);
+    return Array.isArray(wl) && wl.length ? wl : DEFAULT_WATCHLIST;
   });
+  const [settings, setSettings] = useState(() => ({ ...DEFAULT_SETTINGS, ...loadJSON(LS_SETTINGS, {}) }));
+  const [tickerInput, setTickerInput] = useState('');
+  const [inputError, setInputError] = useState('');
 
-  const [data, setData] = useState(null);
+  const [rawChains, setRawChains] = useState(null); // { generated_at, chains, notes }
   const [selected, setSelected] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  const load = async (nocache = false) => {
+  useEffect(() => { localStorage.setItem(LS_WATCHLIST, JSON.stringify(watchlist)); }, [watchlist]);
+  useEffect(() => { localStorage.setItem(LS_SETTINGS, JSON.stringify(settings)); }, [settings]);
+
+  const filters = useMemo(() => ({
+    minEdge: settings.minEdge, type: settings.type,
+  }), [settings.minEdge, settings.type]);
+
+  // Pricing + scoring runs entirely in the browser, so changing account size or
+  // risk re-scores instantly from the cached chains — no refetch needed.
+  const data = useMemo(() => {
+    if (!rawChains) return null;
+    const scan = scanChains(rawChains.chains, {
+      accountSize: settings.accountSize,
+      riskPct: settings.riskPct / 100,
+      maxResults: settings.maxResults,
+    });
+    if (rawChains.notes?.length) {
+      const fetchNotes = rawChains.notes.filter((n) => /no usable|error/i.test(n));
+      scan.notes = [...fetchNotes, ...scan.notes];
+    }
+    return scan;
+  }, [rawChains, settings.accountSize, settings.riskPct, settings.maxResults]);
+
+  // Keep the selected row valid as the scored results change.
+  useEffect(() => {
+    if (!data?.results?.length) { setSelected(null); return; }
+    setSelected((prev) => {
+      const keep = prev && data.results.find((r) => r.opportunity.symbol === prev.opportunity.symbol);
+      return keep || data.results[0];
+    });
+  }, [data]);
+
+  const load = useCallback(async (list, nocache = false) => {
+    if (!list || !list.length) { setRawChains(null); setError(null); return; }
     setLoading(true);
     setError(null);
-    const MAX_RETRIES = 3;
-    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-      try {
-        const json = await fetchOpportunities({
-          tickers,
-          account_size: accountSize,
-          risk_per_trade_pct: riskPct / 100,
-          max_results: maxResults,
-          nocache,
-        });
-        setData(json);
-        if (json.results?.length && (!selected ||
-            !json.results.find((r) => r.opportunity.symbol === selected.opportunity.symbol))) {
-          setSelected(json.results[0]);
-        }
-        setError(null);
-        break;
-      } catch (e) {
-        const isRetryable = /restart|unavailable|non-JSON|502|503/i.test(e.message);
-        if (isRetryable && attempt < MAX_RETRIES) {
-          const wait = 5 * (attempt + 1);
-          setError(`Connecting to backend — retry ${attempt + 1}/${MAX_RETRIES} in ${wait}s…`);
-          await new Promise((r) => setTimeout(r, wait * 1000));
-          continue;
-        }
-        setError(e.message);
+    try {
+      const json = await fetchChains(list, { nocache });
+      setRawChains(json);
+      if (!json.chains?.length) {
+        setError('No option chains came back — Yahoo may be rate-limiting or these symbols have no 0DTE/near-dated expiry right now.');
       }
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
+  }, []);
+
+  // Auto-scan the saved watchlist once on mount.
+  useEffect(() => { load(watchlist, false); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+
+  const addTicker = () => {
+    const t = tickerInput.trim().toUpperCase();
+    if (!t) return;
+    if (!TICKER_RE.test(t)) { setInputError('Enter a valid symbol, e.g. AAPL'); return; }
+    if (watchlist.includes(t)) { setInputError(`${t} is already tracked`); setTickerInput(''); return; }
+    if (watchlist.length >= 25) { setInputError('Watchlist is full (25 max)'); return; }
+    setWatchlist([...watchlist, t]);
+    setTickerInput('');
+    setInputError('');
   };
 
-  useEffect(() => { load(false); /* on mount */ // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const removeTicker = (t) => setWatchlist(watchlist.filter((x) => x !== t));
+
+  // Download the current scan as a JSON file the backtester's `replay` mode can
+  // settle later (same shape the old /api/opportunities endpoint produced).
+  const exportSnapshot = () => {
+    if (!data?.results?.length) return;
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `snapshot-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
 
   const generated = useMemo(() => {
     if (!data) return null;
@@ -69,69 +122,85 @@ export default function App() {
 
   return (
     <div className="app">
-      <header>
-        <div>
-          <h1>0DTE Options Scanner</h1>
-          <div className="subtitle">
-            Find undervalued zero-days-to-expiration options and execute the trade with confidence.
-          </div>
+      <header className="app-header">
+        <div className="brand">
+          <h1>0DTE Scanner</h1>
+          <p className="subtitle">Track tickers and surface undervalued zero-day options.</p>
         </div>
         <div className="status">
-          {loading ? 'Scanning…' : data ? `Last scan: ${generated} · ${data.count} opportunities` : ''}
-          {error && <div className="status error">Error: {error}</div>}
+          {loading ? <span className="status-scanning">Scanning…</span>
+            : data ? <span>Last scan {generated} · <strong>{data.count}</strong> opportunities</span>
+            : <span className="muted">No scan yet</span>}
         </div>
       </header>
 
-      <div className="controls">
-        <label>Tickers
-          <input type="text" value={tickers} onChange={(e) => setTickers(e.target.value)} placeholder="SP500 or SPY,QQQ,…" />
+      <section className="card watchlist">
+        <div className="card-head">
+          <h2>Watchlist</h2>
+          <div className="head-actions">
+            <button className="btn ghost" onClick={exportSnapshot}
+                    disabled={!data?.results?.length}
+                    title="Download the current scan as a replay-compatible JSON snapshot">
+              Export snapshot
+            </button>
+            <button className="btn primary" onClick={() => load(watchlist, true)}
+                    disabled={loading || !watchlist.length}>
+              {loading ? 'Scanning…' : 'Scan watchlist'}
+            </button>
+          </div>
+        </div>
+        <div className="chips">
+          {watchlist.length === 0 && <span className="muted">Add a ticker below to start tracking.</span>}
+          {watchlist.map((t) => (
+            <span className="chip" key={t}>
+              {t}
+              <button onClick={() => removeTicker(t)} aria-label={`Remove ${t}`} title={`Remove ${t}`}>×</button>
+            </span>
+          ))}
+        </div>
+        <div className="add-row">
+          <input
+            type="text"
+            value={tickerInput}
+            placeholder="Add ticker (e.g. AAPL)"
+            maxLength={6}
+            onChange={(e) => { setTickerInput(e.target.value.toUpperCase()); setInputError(''); }}
+            onKeyDown={(e) => { if (e.key === 'Enter') addTicker(); }}
+          />
+          <button className="btn ghost" onClick={addTicker}>Add</button>
+        </div>
+        {inputError && <div className="input-error">{inputError}</div>}
+      </section>
+
+      <section className="toolbar">
+        <label className="field">Account ($)
+          <input type="number" min="100" step="100" value={settings.accountSize}
+                 onChange={(e) => setSettings({ ...settings, accountSize: Number(e.target.value) })} />
         </label>
-        <label>Account ($)
-          <input type="number" min="100" step="100" value={accountSize}
-                 onChange={(e) => setAccountSize(Number(e.target.value))} />
+        <label className="field">Risk / trade (%)
+          <input type="number" min="0.1" max="100" step="0.1" value={settings.riskPct}
+                 onChange={(e) => setSettings({ ...settings, riskPct: Number(e.target.value) })} />
         </label>
-        <label>Risk / trade (%)
-          <input type="number" min="0.1" max="100" step="0.1" value={riskPct}
-                 onChange={(e) => setRiskPct(Number(e.target.value))} />
+        <label className="field">Min edge (%)
+          <input type="number" min="0" step="0.5" value={settings.minEdge}
+                 onChange={(e) => setSettings({ ...settings, minEdge: Number(e.target.value) })} />
         </label>
-        <label>Max results
-          <input type="number" min="1" max="200" value={maxResults}
-                 onChange={(e) => setMaxResults(Number(e.target.value))} />
-        </label>
-        <label>Min edge (%)
-          <input type="number" min="0" step="0.5" value={filters.minEdge}
-                 onChange={(e) => setFilters({ ...filters, minEdge: Number(e.target.value) })} />
-        </label>
-        <label>Min volume
-          <input type="number" min="0" step="10" value={filters.minVolume}
-                 onChange={(e) => setFilters({ ...filters, minVolume: Number(e.target.value) })} />
-        </label>
-        <label>Type
-          <select value={filters.type} onChange={(e) => setFilters({ ...filters, type: e.target.value })}>
+        <label className="field">Type
+          <select value={settings.type} onChange={(e) => setSettings({ ...settings, type: e.target.value })}>
             <option value="all">All</option>
             <option value="call">Calls</option>
             <option value="put">Puts</option>
           </select>
         </label>
-        <label>Filter ticker
-          <input type="text" value={filters.ticker} placeholder="e.g. SPY"
-                 onChange={(e) => setFilters({ ...filters, ticker: e.target.value })} />
-        </label>
-        <button onClick={() => load(false)} disabled={loading}>
-          {loading ? 'Loading…' : 'Re-scan'}
-        </button>
-        <button className="secondary" onClick={() => load(true)} disabled={loading}>
-          Force refresh
-        </button>
-      </div>
+      </section>
+
+      {error && <div className="banner error">⚠️ {error}</div>}
 
       {data?.notes?.length ? (
-        <div className="notes">
-          <details>
-            <summary>Scan notes ({data.notes.length})</summary>
-            <ul>{data.notes.map((n, i) => <li key={i}>{n}</li>)}</ul>
-          </details>
-        </div>
+        <details className="notes">
+          <summary>Scan notes ({data.notes.length})</summary>
+          <ul>{data.notes.map((n, i) => <li key={i}>{n}</li>)}</ul>
+        </details>
       ) : null}
 
       <RejectionInsights rejectionSummary={data?.rejection_summary} />
@@ -142,18 +211,16 @@ export default function App() {
           selected={selected}
           onSelect={setSelected}
           filters={filters}
-          onFilterChange={setFilters}
         />
         <TradeDetail item={selected} />
       </div>
 
-      <div className="disclaimer">
-        ⚠️ <strong>Educational use only.</strong> 0DTE options are extremely high-risk and can lose
-        100% of premium in minutes. Fair-value estimates are based on Black-Scholes with a
-        volume-weighted reference IV from the same chain — they are an approximation, not a
-        guarantee. Always verify quotes in your broker before placing any order, account for
-        commissions and slippage, and never trade money you cannot afford to lose.
-      </div>
+      <footer className="disclaimer">
+        <strong>Educational use only.</strong> 0DTE options are extremely high-risk and can lose
+        100% of premium in minutes. Fair-value estimates use Black-Scholes with a volume-weighted
+        reference IV from the same chain — an approximation, not a guarantee. Always verify quotes
+        in your broker before trading.
+      </footer>
     </div>
   );
 }

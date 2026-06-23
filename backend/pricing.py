@@ -10,9 +10,18 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from scipy.stats import norm
-
 SQRT_2PI = math.sqrt(2.0 * math.pi)
+_SQRT2 = math.sqrt(2.0)
+
+
+def _norm_cdf(x: float) -> float:
+    """Standard-normal cumulative distribution function.
+
+    Φ(x) = ½·erfc(−x/√2). Uses :func:`math.erfc` from the standard library
+    (accurate to machine precision), so the pricing engine carries no heavy
+    numerical dependency and is small enough to run as a serverless function.
+    """
+    return 0.5 * math.erfc(-x / _SQRT2)
 
 
 @dataclass
@@ -62,8 +71,8 @@ def bs_price(S: float, K: float, T: float, r: float, sigma: float,
     disc_r = math.exp(-r * T)
     disc_q = math.exp(-q * T)
     if option_type == "call":
-        return S * disc_q * norm.cdf(d1) - K * disc_r * norm.cdf(d2)
-    return K * disc_r * norm.cdf(-d2) - S * disc_q * norm.cdf(-d1)
+        return S * disc_q * _norm_cdf(d1) - K * disc_r * _norm_cdf(d2)
+    return K * disc_r * _norm_cdf(-d2) - S * disc_q * _norm_cdf(-d1)
 
 
 def bs_greeks(S: float, K: float, T: float, r: float, sigma: float,
@@ -80,17 +89,17 @@ def bs_greeks(S: float, K: float, T: float, r: float, sigma: float,
     gamma = disc_q * pdf_d1 / (S * sigma * math.sqrt(T))
     vega = S * disc_q * pdf_d1 * math.sqrt(T)
     if option_type == "call":
-        delta = disc_q * norm.cdf(d1)
+        delta = disc_q * _norm_cdf(d1)
         theta = (-(S * disc_q * pdf_d1 * sigma) / (2 * math.sqrt(T))
-                 - r * K * disc_r * norm.cdf(d2)
-                 + q * S * disc_q * norm.cdf(d1))
-        rho = K * T * disc_r * norm.cdf(d2)
+                 - r * K * disc_r * _norm_cdf(d2)
+                 + q * S * disc_q * _norm_cdf(d1))
+        rho = K * T * disc_r * _norm_cdf(d2)
     else:
-        delta = -disc_q * norm.cdf(-d1)
+        delta = -disc_q * _norm_cdf(-d1)
         theta = (-(S * disc_q * pdf_d1 * sigma) / (2 * math.sqrt(T))
-                 + r * K * disc_r * norm.cdf(-d2)
-                 - q * S * disc_q * norm.cdf(-d1))
-        rho = -K * T * disc_r * norm.cdf(-d2)
+                 + r * K * disc_r * _norm_cdf(-d2)
+                 - q * S * disc_q * _norm_cdf(-d1))
+        rho = -K * T * disc_r * _norm_cdf(-d2)
 
     return Greeks(delta=delta, gamma=gamma, vega=vega, theta=theta, rho=rho)
 

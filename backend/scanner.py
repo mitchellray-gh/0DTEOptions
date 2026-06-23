@@ -12,7 +12,10 @@ Pipeline:
   3. Filter for liquidity (bid > 0, volume / OI minimums, sane spread) and
      rank by edge.
 
-The output is a list of `OpportunityWithPlan` items ready for the UI.
+The web app calls :func:`fetch_chains` for raw chains and scores them in the
+browser; the per-contract helpers here (:func:`compute_reference_iv`,
+:func:`_evaluate_contract`, :func:`_build_plan`) are also reused by the
+backtester in :mod:`backend.backtest`.
 """
 from __future__ import annotations
 
@@ -20,7 +23,6 @@ import logging
 import math
 import threading
 import time as _time
-from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -30,10 +32,7 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
-from .models import (
-    Coaching, Opportunity, OpportunityWithPlan, RejectedContract,
-    RejectionSummary, TradePlan,
-)
+from .models import Opportunity, RejectedContract, TradePlan
 from .pricing import bs_greeks, bs_price, implied_vol
 from .sp500 import fetch_sp500_tickers
 
@@ -88,7 +87,6 @@ MIN_BID = 0.05
 MAX_REL_SPREAD = 0.25       # (ask-bid)/mid
 MAX_STRIKE_DISTANCE_PCT = 0.50  # reject strikes >50% away from spot (non-standard / post-split)
 NEAR_THE_MONEY_PCT = 0.03   # +/-3% of spot for the reference IV calc
-MAX_RESULTS = 50
 
 
 @dataclass
@@ -143,6 +141,41 @@ def _safe_mid(bid: float, ask: float, last: float) -> float:
     if last > 0:
         return last
     return max(bid, ask, 0.0)
+
+
+def compute_reference_iv(calls: pd.DataFrame, puts: pd.DataFrame,
+                         spot: float) -> float | None:
+    """Chain consensus IV = volume-weighted IV of near-the-money contracts.
+
+    Considers contracts within ``NEAR_THE_MONEY_PCT`` of ``spot`` that have a
+    sane IV (1%-500%) and non-zero volume, and returns the volume-weighted mean
+    of their implied volatilities. Falls back to the whole-chain median IV when
+    nothing qualifies near the money, or ``None`` when the chain has no usable
+    IVs at all.
+
+    This is the single source of truth for the chain's "fair" IV anchor: both
+    the live scanner and the backtester call it so they price fair value the
+    same way.
+    """
+    lo, hi = spot * (1 - NEAR_THE_MONEY_PCT), spot * (1 + NEAR_THE_MONEY_PCT)
+    near = pd.concat([
+        calls.assign(_type="call"),
+        puts.assign(_type="put"),
+    ])
+    near = near[(near["strike"] >= lo) & (near["strike"] <= hi)]
+    near = near[(near["impliedVolatility"] > 0.01) & (near["impliedVolatility"] < 5)]
+    near = near[near["volume"].fillna(0) > 0]
+
+    if near.empty:
+        # Fallback: median IV across the whole chain
+        all_iv = pd.concat([calls["impliedVolatility"], puts["impliedVolatility"]])
+        all_iv = all_iv[(all_iv > 0.01) & (all_iv < 5)]
+        if all_iv.empty:
+            return None
+        return float(all_iv.median())
+
+    weights = near["volume"].fillna(0).astype(float).clip(lower=1.0)
+    return float(np.average(near["impliedVolatility"].astype(float), weights=weights))
 
 
 def _build_chain_context_with_retry(ticker: str, risk_free: float,
@@ -246,26 +279,9 @@ def _build_chain_context(ticker: str, risk_free: float,
     T = max(minutes, 1) / (60 * 24 * 365)
 
     # Reference IV: VWAP of yfinance-provided IVs for near-the-money contracts.
-    lo, hi = spot * (1 - NEAR_THE_MONEY_PCT), spot * (1 + NEAR_THE_MONEY_PCT)
-    near = pd.concat([
-        calls.assign(_type="call"),
-        puts.assign(_type="put"),
-    ])
-    near = near[(near["strike"] >= lo) & (near["strike"] <= hi)]
-    near = near[(near["impliedVolatility"] > 0.01) & (near["impliedVolatility"] < 5)]
-    near = near[near["volume"].fillna(0) > 0]
-
-    if near.empty:
-        # Fallback: median IV across the whole chain
-        all_iv = pd.concat([calls["impliedVolatility"], puts["impliedVolatility"]])
-        all_iv = all_iv[(all_iv > 0.01) & (all_iv < 5)]
-        if all_iv.empty:
-            return None
-        ref_iv = float(all_iv.median())
-    else:
-        weights = near["volume"].fillna(0).astype(float).clip(lower=1.0)
-        ref_iv = float(np.average(near["impliedVolatility"].astype(float),
-                                  weights=weights))
+    ref_iv = compute_reference_iv(calls, puts, spot)
+    if ref_iv is None:
+        return None
 
     ctx = _ChainContext(
         underlying=ticker,
@@ -420,116 +436,6 @@ def _evaluate_contract(row: pd.Series, option_type: str,
     )
 
 
-def _build_coaching(opp: Opportunity, plan: "TradePlan") -> Coaching:
-    """Generate beginner-friendly coaching for an opportunity."""
-    otype = opp.option_type.upper()  # CALL or PUT
-    direction = "up" if opp.option_type == "call" else "down"
-    opposite = "down" if opp.option_type == "call" else "up"
-
-    # Action summary
-    action_summary = f"Buy a {otype} at ${opp.ask:.2f}"
-
-    # Why this trade
-    why = (
-        f"Our model says this {otype} is worth ${opp.fair_value:.2f} but the market "
-        f"is selling it for only ${opp.ask:.2f} — that's {opp.edge_pct:.0%} cheaper "
-        f"than fair value. Think of it like finding a $100 item on sale for "
-        f"${100 * (1 - opp.edge_pct):.0f}."
-    )
-
-    # Entry instruction
-    entry_instruction = (
-        f"In your broker, search for {opp.underlying} options expiring {opp.expiration}. "
-        f"Find the ${opp.strike:g} {otype} strike. Place a LIMIT order (not market!) "
-        f"to BUY TO OPEN at ${opp.ask:.2f} or lower. "
-        f"You'll buy {plan.suggested_contracts} contract(s) for a total of "
-        f"${plan.total_cost_usd:.2f} ({plan.suggested_contracts} × ${plan.cost_per_contract_usd:.2f})."
-    )
-
-    # Expected profit
-    expected_profit = (
-        f"If {opp.underlying} moves {direction} and the option price reaches "
-        f"${plan.target_exit_price:.2f} (our conservative target), you'd make "
-        f"${plan.target_profit_usd:.2f} profit — that's a "
-        f"{plan.target_profit_usd / plan.total_cost_usd * 100:.0f}% return on "
-        f"your ${plan.total_cost_usd:.2f} investment."
-    )
-
-    # Max risk
-    max_risk = (
-        f"The MOST you can lose is ${plan.max_loss_usd:.2f} (your entire premium). "
-        f"This happens if {opp.underlying} finishes {'below' if opp.option_type == 'call' else 'above'} "
-        f"${opp.strike:g} at expiration. Never risk more than you can afford to lose."
-    )
-
-    # Exit plan
-    if opp.minutes_to_expiry <= 30:
-        time_note = (
-            f"⚠️ ONLY {opp.minutes_to_expiry} MINUTES LEFT — this trade needs "
-            f"immediate attention. Set your sell order right away."
-        )
-    elif opp.minutes_to_expiry <= 120:
-        time_note = (
-            f"You have about {opp.minutes_to_expiry} minutes until market close. "
-            f"Watch this closely and don't walk away."
-        )
-    else:
-        hrs = opp.minutes_to_expiry // 60
-        mins = opp.minutes_to_expiry % 60
-        time_note = (
-            f"You have roughly {hrs}h {mins}m until market close. "
-            f"Check in every 15-30 minutes."
-        )
-
-    exit_plan = (
-        f"As soon as your buy order fills, place a LIMIT SELL TO CLOSE at "
-        f"${plan.target_exit_price:.2f} (take-profit). If the option drops to "
-        f"${plan.stop_loss_price:.2f} (half your cost), cut your losses and sell. "
-        f"{time_note} "
-        f"Close ALL positions by 3:45 PM ET no matter what — holding past that "
-        f"risks automatic exercise and unexpected assignment."
-    )
-
-    # Watch list
-    watch_list = [
-        f"📈 {opp.underlying} stock price — you need it to move {direction} toward ${opp.strike:g}"
-            if abs(opp.delta) < 0.5 else
-        f"📈 {opp.underlying} stock price — it's already near your strike, keep it moving {direction}",
-        f"💰 Option bid price — sell when it hits ${plan.target_exit_price:.2f} or higher",
-        f"🛑 Cut losses if option price drops to ${plan.stop_loss_price:.2f}",
-        f"⏰ Time decay is your enemy — this {otype} loses ${abs(opp.theta_per_day):.2f}/day (accelerating)",
-        f"📊 Volume: {opp.volume:,} traded today — {'good liquidity' if opp.volume >= 200 else 'decent liquidity, watch bid-ask spread'}",
-    ]
-
-    # Urgency
-    if opp.minutes_to_expiry <= 60:
-        urgency: str = "high"
-    elif opp.minutes_to_expiry <= 180:
-        urgency = "medium"
-    else:
-        urgency = "low"
-
-    # Confidence based on edge + score
-    if opp.edge_pct >= 0.15 and opp.score >= 15:
-        confidence: str = "strong"
-    elif opp.edge_pct >= 0.08 or opp.score >= 10:
-        confidence = "moderate"
-    else:
-        confidence = "speculative"
-
-    return Coaching(
-        action_summary=action_summary,
-        why=why,
-        entry_instruction=entry_instruction,
-        expected_profit=expected_profit,
-        max_risk=max_risk,
-        exit_plan=exit_plan,
-        watch_list=watch_list,
-        urgency=urgency,
-        confidence=confidence,
-    )
-
-
 def _build_plan(opp: Opportunity, account_size_usd: float = 5_000.0,
                 risk_per_trade_pct: float = 0.02) -> TradePlan:
     """Construct an explicit, human-readable trade plan.
@@ -596,28 +502,62 @@ def _build_plan(opp: Opportunity, account_size_usd: float = 5_000.0,
     )
 
 
-def scan_tickers(tickers: list[str] | None = None,
-                 risk_free: float = DEFAULT_RISK_FREE_RATE,
-                 account_size_usd: float = 5_000.0,
-                 risk_per_trade_pct: float = 0.02,
-                 max_results: int = MAX_RESULTS,
-                 ) -> tuple[list[OpportunityWithPlan], list[str], RejectionSummary]:
-    """Top-level scan. Returns (results, notes, rejection_summary).
+# ── Thin data proxy ──────────────────────────────────────────────────────────
+# The web app does all pricing/scoring in the browser (frontend/src/lib/*.js).
+# These helpers expose just the raw Yahoo option chain — the one thing a browser
+# can't fetch itself because of CORS.
 
-    When tickers contains the sentinel "SP500", it is expanded to the
-    full S&P 500 constituent list.  Scanning is parallelised across a
-    thread pool because yfinance calls are I/O-bound.
+def _row_float(v) -> float:
+    try:
+        if v is None or pd.isna(v):
+            return 0.0
+        return float(v)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _row_int(v) -> int:
+    return int(round(_row_float(v)))
+
+
+def _serialize_chain_rows(df: pd.DataFrame) -> list[dict]:
+    """Convert a yfinance calls/puts DataFrame to plain JSON-able rows."""
+    rows: list[dict] = []
+    for _, r in df.iterrows():
+        rows.append({
+            "contractSymbol": str(r.get("contractSymbol", "")),
+            "strike": _row_float(r.get("strike")),
+            "bid": _row_float(r.get("bid")),
+            "ask": _row_float(r.get("ask")),
+            "lastPrice": _row_float(r.get("lastPrice")),
+            "volume": _row_int(r.get("volume")),
+            "openInterest": _row_int(r.get("openInterest")),
+            "impliedVolatility": _row_float(r.get("impliedVolatility")),
+        })
+    return rows
+
+
+def fetch_chains(tickers: list[str] | None = None,
+                 risk_free: float = DEFAULT_RISK_FREE_RATE,
+                 ) -> tuple[list[dict], list[str]]:
+    """Fetch raw 0DTE/near-dated option chains for the given tickers.
+
+    Returns ``(chains, notes)`` where each chain is::
+
+        {underlying, spot, expiration, minutes_to_expiry, calls[], puts[]}
+
+    All scoring (reference IV, edge, trade plan) is intentionally left to the
+    client — this is just the data fetch. The ``SP500`` sentinel is expanded to
+    the full S&P 500 constituent list.
     """
     raw_tickers = tickers or DEFAULT_TICKERS
 
-    # Expand SP500 sentinel
     expanded: list[str] = []
     for t in raw_tickers:
         if t.upper() == SP500_SENTINEL:
             expanded.extend(fetch_sp500_tickers())
         else:
             expanded.append(t)
-    # Deduplicate while preserving order
     seen: set[str] = set()
     unique_tickers: list[str] = []
     for t in expanded:
@@ -627,90 +567,39 @@ def scan_tickers(tickers: list[str] | None = None,
             unique_tickers.append(up)
 
     now = _today_utc_date()
+    chains: list[dict] = []
     notes: list[str] = []
-    opportunities: list[Opportunity] = []
-    rejections: list[RejectedContract] = []
-    total_scanned = 0
 
-    def _scan_one(ticker: str):
-        """Scan a single ticker; returns (opps, rejs, note, scanned_count)."""
-        local_opps: list[Opportunity] = []
-        local_rejs: list[RejectedContract] = []
-        local_scanned = 0
+    def _fetch_one(ticker: str):
         ctx_tuple = _build_chain_context_with_retry(ticker, risk_free, now)
         if ctx_tuple is None:
-            return local_opps, local_rejs, f"{ticker}: no usable 0DTE/near-dated chain", 0
+            return None, f"{ticker}: no usable 0DTE/near-dated chain"
         ctx, calls, puts = ctx_tuple
-        note = (
-            f"{ticker}: spot=${ctx.spot:.2f}, expiry={ctx.expiry_iso}, "
-            f"ref_IV={ctx.reference_iv:.1%}, mins_left={ctx.minutes_to_expiry}"
-        )
-        for _, row in calls.iterrows():
-            local_scanned += 1
-            result = _evaluate_contract(row, "call", ctx, risk_free)
-            if isinstance(result, Opportunity):
-                local_opps.append(result)
-            elif isinstance(result, RejectedContract):
-                local_rejs.append(result)
-        for _, row in puts.iterrows():
-            local_scanned += 1
-            result = _evaluate_contract(row, "put", ctx, risk_free)
-            if isinstance(result, Opportunity):
-                local_opps.append(result)
-            elif isinstance(result, RejectedContract):
-                local_rejs.append(result)
-        return local_opps, local_rejs, note, local_scanned
+        chain = {
+            "underlying": ctx.underlying,
+            "spot": round(ctx.spot, 4),
+            "expiration": ctx.expiry_iso,
+            "minutes_to_expiry": ctx.minutes_to_expiry,
+            "calls": _serialize_chain_rows(calls),
+            "puts": _serialize_chain_rows(puts),
+        }
+        note = (f"{ctx.underlying}: spot=${ctx.spot:.2f}, expiry={ctx.expiry_iso}, "
+                f"mins_left={ctx.minutes_to_expiry}")
+        return chain, note
 
-    # Process tickers with throttled concurrency to respect Yahoo rate limits
-    workers = min(_MAX_WORKERS, len(unique_tickers))
-    log.info("Scanning %d tickers with %d workers (%.1fs throttle)…",
-             len(unique_tickers), workers, _MIN_REQUEST_GAP_S)
-
+    workers = min(_MAX_WORKERS, max(len(unique_tickers), 1))
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(_scan_one, t): t for t in unique_tickers}
+        futures = {pool.submit(_fetch_one, t): t for t in unique_tickers}
         for fut in as_completed(futures):
             ticker = futures[fut]
             try:
-                opps, rejs, note, scanned = fut.result()
-                opportunities.extend(opps)
-                rejections.extend(rejs)
+                chain, note = fut.result()
+                if chain is not None:
+                    chains.append(chain)
                 notes.append(note)
-                total_scanned += scanned
-            except Exception as exc:
-                log.warning("Ticker %s failed: %s", ticker, exc)
-                notes.append(f"{ticker}: scan error — {exc}")
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Chain fetch for %s failed: %s", ticker, exc)
+                notes.append(f"{ticker}: fetch error — {exc}")
 
-    opportunities.sort(key=lambda o: o.score, reverse=True)
-    opportunities = opportunities[:max_results]
+    return chains, notes
 
-    results = []
-    for o in opportunities:
-        plan = _build_plan(o, account_size_usd, risk_per_trade_pct)
-        coaching = _build_coaching(o, plan)
-        results.append(OpportunityWithPlan(
-            opportunity=o,
-            plan=plan,
-            coaching=coaching,
-        ))
-
-    # Build rejection summary with up to 5 samples per reason
-    by_reason: dict[str, int] = defaultdict(int)
-    samples_by_reason: dict[str, list[RejectedContract]] = defaultdict(list)
-    for rej in rejections:
-        by_reason[rej.rejection_reason] += 1
-        if len(samples_by_reason[rej.rejection_reason]) < 5:
-            samples_by_reason[rej.rejection_reason].append(rej)
-
-    all_samples: list[RejectedContract] = []
-    for reason_samples in samples_by_reason.values():
-        all_samples.extend(reason_samples)
-
-    rejection_summary = RejectionSummary(
-        total_contracts_scanned=total_scanned,
-        total_rejected=len(rejections),
-        total_passed=len(opportunities),
-        by_reason=dict(by_reason),
-        samples=all_samples,
-    )
-
-    return results, notes, rejection_summary

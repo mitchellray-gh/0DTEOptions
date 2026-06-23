@@ -1,7 +1,5 @@
 import React from 'react';
-
-const fmt$ = (x) => '$' + Number(x).toFixed(2);
-const fmtPct = (x) => (x * 100).toFixed(1) + '%';
+import { fmt$, fmtPct } from '../lib/format.js';
 
 export default function TradeDetail({ item }) {
   if (!item) {

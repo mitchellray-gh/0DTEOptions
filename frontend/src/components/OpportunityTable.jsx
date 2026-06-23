@@ -1,7 +1,5 @@
 import React, { useState } from 'react';
-
-const fmtPct = (x) => (x * 100).toFixed(1) + '%';
-const fmt$ = (x) => '$' + Number(x).toFixed(2);
+import { fmt$, fmtPct } from '../lib/format.js';
 
 const URGENCY_LABEL = { high: '🔴 Act Now', medium: '🟡 Watch Closely', low: '🟢 Time Available' };
 const CONFIDENCE_LABEL = { strong: '💪 Strong', moderate: '👍 Moderate', speculative: '🤔 Speculative' };
@@ -56,15 +54,13 @@ function CoachingPanel({ coaching, plan }) {
   );
 }
 
-export default function OpportunityTable({ items, selected, onSelect, filters, onFilterChange }) {
+export default function OpportunityTable({ items, selected, onSelect, filters }) {
   const [expandedSymbol, setExpandedSymbol] = useState(null);
 
   const visible = items.filter((it) => {
     const o = it.opportunity;
     if (filters.minEdge && o.edge_pct < filters.minEdge / 100) return false;
-    if (filters.minVolume && o.volume < filters.minVolume) return false;
     if (filters.type !== 'all' && o.option_type !== filters.type) return false;
-    if (filters.ticker && !o.underlying.toUpperCase().includes(filters.ticker.toUpperCase())) return false;
     return true;
   });
 
