@@ -1,7 +1,14 @@
-import React from 'react';
+import React, { useMemo, useState } from 'react';
 import { fmt$, fmtPct } from '../lib/format.js';
+import { buildRobinhoodOrder, ROBINHOOD_MCP_ENDPOINT } from '../lib/robinhood.js';
 
 export default function TradeDetail({ item }) {
+  const [copied, setCopied] = useState(false);
+  const order = useMemo(
+    () => (item ? buildRobinhoodOrder(item.opportunity, item.plan) : null),
+    [item]
+  );
+
   if (!item) {
     return (
       <aside className="detail">
@@ -15,12 +22,40 @@ export default function TradeDetail({ item }) {
   }
   const o = item.opportunity;
   const p = item.plan;
+
+  const copyOrder = async () => {
+    if (!order) return;
+    try {
+      await navigator.clipboard.writeText(order.instruction);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setCopied(false);
+    }
+  };
+
   return (
     <aside className="detail">
       <h2>{p.side_human}</h2>
       <div className="sym">{p.contract_symbol}</div>
 
       <div className="action">{p.action.replace('_', ' ')} {o.option_type.toUpperCase()} @ {fmt$(p.limit_price)}</div>
+
+      <h3>Trade on Robinhood (MCP)</h3>
+      <div className="rationale">
+        Send this instruction to an agent connected to Robinhood's trading MCP
+        server (<code>{ROBINHOOD_MCP_ENDPOINT}</code>) to place the order. It is
+        prepared, not submitted — review and confirm in your account first.
+      </div>
+      <div className="rh-actions">
+        <button className="btn primary" onClick={copyOrder}>
+          {copied ? 'Copied ✓' : 'Copy order instruction'}
+        </button>
+        <a className="btn ghost" href={ROBINHOOD_MCP_ENDPOINT} target="_blank" rel="noopener noreferrer">
+          Open MCP endpoint
+        </a>
+      </div>
+      <pre className="rh-instruction">{order.instruction}</pre>
 
       <h3>Trade plan</h3>
       <div className="row"><span className="k">Contracts</span><span className="v">{p.suggested_contracts}</span></div>
