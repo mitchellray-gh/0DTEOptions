@@ -57,6 +57,7 @@ The API exposes:
 - `GET /api/health`
 - `GET /api/chain?tickers=SPY,QQQ` — **raw** option chains (all the web app needs; it scores them client-side). Cached ~20s; append `&nocache=true` to bypass.
 - `POST /api/backtest` — see [Backtesting](#backtesting).
+- `POST /api/robinhood/order` — turn a scan result into a Robinhood trading-MCP order (see [Trading via Robinhood MCP](#trading-via-robinhood-mcp)).
 
 ### 2. Frontend
 
@@ -274,6 +275,7 @@ python -m unittest discover -s backend/backtest/tests
 │   ├── __init__.py
 │   ├── main.py        ← FastAPI app + CORS + cache + /api/backtest
 │   ├── scanner.py     ← chain fetch, reference-IV calc, edge ranking, trade plan
+│   ├── robinhood.py   ← trade plan → Robinhood trading-MCP order instruction
 │   ├── pricing.py     ← Black-Scholes price, IV (Brent), Greeks
 │   ├── models.py      ← Pydantic schemas (Opportunity, TradePlan, ScanResponse)
 │   ├── sp500.py       ← S&P 500 constituent list (Wikipedia + fallback)
@@ -297,6 +299,7 @@ python -m unittest discover -s backend/backtest/tests
 │       ├── styles.css
 │       ├── lib/
 │       │   ├── pricing.js  ← Black-Scholes / IV / Greeks (JS port)
+│       │   ├── robinhood.js ← trade plan → Robinhood trading-MCP order (JS port)
 │       │   └── scanner.js  ← reference-IV, edge ranking, trade plan (JS port)
 │       └── components/
 │           ├── OpportunityTable.jsx
@@ -312,9 +315,57 @@ python -m unittest discover -s backend/backtest/tests
 
 ---
 
+## Trading via Robinhood MCP
+
+The scanner stops at *"here is the exact trade."* To bridge that last mile to
+**execution**, every trade plan can be turned into a ready-to-run order for
+[Robinhood's hosted trading MCP server](https://agent.robinhood.com/mcp/trading).
+
+That endpoint is a remote [Model Context Protocol](https://modelcontextprotocol.io)
+server: an MCP-capable agent (e.g. Claude or the Robinhood agent app) connects to
+it, authenticates with **your** Robinhood account, and the server exposes trading
+tools the agent can call on your behalf. Because it's driven by natural language,
+the scanner produces a precise instruction string the agent executes — plus a
+normalised, structured order spec for callers that map fields onto the server's
+tools directly (confirm the exact tool/argument names against the live
+`tools/list`).
+
+- **In the web UI** — select any opportunity and use **Copy order instruction**
+  in the trade detail panel, then paste it into your MCP-connected agent.
+- **Over HTTP** — `POST /api/robinhood/order` with the scan result's
+  `opportunity` and `plan` objects:
+
+  ```bash
+  curl -s localhost:8000/api/robinhood/order \
+    -H 'Content-Type: application/json' \
+    -d '{"opportunity": { … }, "plan": { … }}'
+  ```
+
+  The response contains:
+
+  ```jsonc
+  {
+    "endpoint": "https://agent.robinhood.com/mcp/trading",
+    "instruction": "Using the Robinhood trading MCP server (…), place a BUY-TO-OPEN limit order: buy 2 contract(s) of the SPY 2026-05-14 $525 CALL …",
+    "entry": { "side": "buy", "position_effect": "open", "order_type": "limit", "limit_price": 0.45, "quantity": 2, "time_in_force": "day", … },
+    "exit":  [ /* sell-to-close take-profit (limit) + stop-loss (stop) */ ],
+    "disclaimer": "Educational use only. This prepares an order … but does not place it."
+  }
+  ```
+
+> ⚠️ **This prepares an order; it does not place one.** The app never connects to
+> Robinhood or transmits credentials — it only generates the instruction. You (or
+> an explicitly authorised agent) review every detail and confirm in your account
+> before submitting. 0DTE options can lose 100% of premium in minutes.
+
+The same logic lives in both `backend/robinhood.py` and
+`frontend/src/lib/robinhood.js` (a verified port), mirroring the rest of the app.
+
+---
+
 ## Caveats
 
 - **Yahoo data is delayed** (~15 min for some venues). For live trading, swap `yfinance` for a real-time options feed (Polygon.io, Tradier, IBKR, CBOE) — the swap is contained to `_build_chain_context()` in `backend/scanner.py`.
 - **Black-Scholes for American options** — SPY/QQQ etc. weeklies are American. For 0DTE near-the-money calls/puts on non-dividend names the difference is negligible; for deep-ITM puts and dividend-heavy names you may want a binomial tree.
 - **The "fair value" is a relative anchor**, not an absolute truth. We measure deviations *from the rest of the same chain*, which catches stale quotes and momentary dislocations — not directional alpha.
-- **No order routing.** This tool deliberately stops at "tell me the trade." Sending orders is your responsibility (and your broker's).
+- **No order routing.** This tool deliberately stops at "tell me the trade." Sending orders is your responsibility (and your broker's) — but it can now hand a ready-to-execute order to an agent connected to Robinhood's trading MCP server (see [Trading via Robinhood MCP](#trading-via-robinhood-mcp)).

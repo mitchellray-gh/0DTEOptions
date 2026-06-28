@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from .backtest import BacktestConfig, run_backtest
+from .robinhood import build_robinhood_order
 from .scanner import DEFAULT_RISK_FREE_RATE, fetch_chains
 from .sp500 import fetch_sp500_tickers
 
@@ -93,6 +94,37 @@ def sp500_tickers() -> dict:
     """Return the current S&P 500 ticker list."""
     tickers = fetch_sp500_tickers()
     return {"count": len(tickers), "tickers": tickers}
+
+
+class RobinhoodOrderRequest(BaseModel):
+    """An ``(opportunity, plan)`` pair to convert into a Robinhood-MCP order.
+
+    Both come straight from a scan result (``results[i].opportunity`` and
+    ``results[i].plan``). Only the fields the order needs are required; extra
+    keys are ignored.
+    """
+    opportunity: dict
+    plan: dict
+    time_in_force: Literal["day", "gtc"] = "day"
+
+
+@app.post("/api/robinhood/order")
+def robinhood_order(req: RobinhoodOrderRequest) -> dict:
+    """Translate a scanner trade plan into a Robinhood trading-MCP order.
+
+    Returns a natural-language ``instruction`` an MCP agent can execute against
+    ``https://agent.robinhood.com/mcp/trading`` plus a normalised order spec.
+    This does NOT place an order — it only prepares one for the user to review.
+    """
+    if not req.opportunity or not req.plan:
+        raise HTTPException(400, "Provide both 'opportunity' and 'plan'.")
+    try:
+        return build_robinhood_order(
+            req.opportunity, req.plan, time_in_force=req.time_in_force
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.exception("Robinhood order build failed")
+        raise HTTPException(500, f"Could not build order: {exc}") from exc
 
 
 class BacktestRequest(BaseModel):
