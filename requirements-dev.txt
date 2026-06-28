@@ -1,0 +1,16 @@
+# Local development dependencies.
+#
+# Install with:  pip install -r requirements-dev.txt
+#
+# These are intentionally kept OUT of requirements.txt so they are not bundled
+# into the Vercel serverless function (Vercel serves the ASGI ``app`` directly
+# and never runs uvicorn, so shipping it — plus its uvloop/httptools/watchfiles
+# extras — only inflated the function bundle past the 225 MB limit).
+-r requirements.txt
+
+# ASGI server for running the API locally (uvicorn backend.main:app --reload).
+uvicorn[standard]>=0.27.0
+
+# Faster HTML parser for pd.read_html during local development. Production falls
+# back to the bundled beautifulsoup4 + html5lib parsers.
+lxml>=5.0.0

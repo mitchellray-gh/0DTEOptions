@@ -48,7 +48,7 @@ def fetch_sp500_tickers(force: bool = False) -> list[str]:
 
 def _fetch_from_wikipedia() -> list[str] | None:
     try:
-        tables = pd.read_html(_WIKI_URL, header=0)
+        tables = pd.read_html(_WIKI_URL, header=0, flavor="bs4")
         df = tables[0]
         # The ticker column is usually "Symbol"
         col = None
