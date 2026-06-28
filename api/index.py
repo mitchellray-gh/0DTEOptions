@@ -6,6 +6,7 @@ here. Every ``/api/*`` request is rewritten to this single function (see
 
 Locally you still run the app the normal way::
 
+    pip install -r requirements-dev.txt
     uvicorn backend.main:app --reload --port 8000
 
 This file only matters in the Vercel deployment.

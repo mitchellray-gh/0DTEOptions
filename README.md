@@ -48,7 +48,7 @@ The backend is a **thin data proxy**. All the math lives in the React app.
 ### 1. Backend (data proxy)
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 uvicorn backend.main:app --reload --port 8000
 ```
 
@@ -305,7 +305,8 @@ python -m unittest discover -s backend/backtest/tests
 ├── api/
 │   └── index.py       ← Vercel serverless entry (exposes backend.main:app)
 ├── vercel.json        ← Vercel build + /api rewrite + 60s function config
-├── requirements.txt
+├── requirements.txt   ← runtime deps bundled into the Vercel function
+├── requirements-dev.txt ← local-dev extras (uvicorn, lxml)
 └── README.md
 ```
 
