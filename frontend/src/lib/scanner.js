@@ -202,10 +202,10 @@ function buildPlan(opp, accountSize = 5000, riskPct = 0.02) {
   const steps = [
     `1. In your broker, open the options chain for ${opp.underlying} expiring ${opp.expiration}.`,
     `2. Select the $${opp.strike} ${opp.option_type.toUpperCase()} contract (${opp.symbol}).`,
-    `3. Place a LIMIT BUY-TO-OPEN order for ${contracts} contract(s) at ${fmt$(opp.ask)} or better.`,
-    `4. Immediately stage a LIMIT SELL-TO-CLOSE at ${fmt$(targetExit)} (take-profit).`,
-    `5. Set a mental/alert stop at ${fmt$(stopPrice)} (≈50% of premium); close manually if hit.`,
-    `6. Plan to flatten any remaining position by 15:45 ET to avoid pin / assignment risk.`,
+    `3. Place a LIMIT BUY-TO-OPEN order for ${contracts} ${opp.option_type.toUpperCase()} contract(s) at ${fmt$(opp.ask)} or better.`,
+    `4. Immediately stage a LIMIT SELL-TO-CLOSE order on the same ${opp.option_type.toUpperCase()} at ${fmt$(targetExit)} (take-profit).`,
+    `5. Set a stop at ${fmt$(stopPrice)} (≈50% of premium); SELL-TO-CLOSE manually if hit.`,
+    `6. SELL-TO-CLOSE any remaining position by 15:45 ET to avoid pin / assignment risk.`,
   ];
 
   return {
@@ -231,14 +231,14 @@ function buildCoaching(opp, plan) {
   const otype = opp.option_type.toUpperCase();
   const direction = opp.option_type === 'call' ? 'up' : 'down';
 
-  const action_summary = `Buy a ${otype} at ${fmt$(opp.ask)}`;
+  const action_summary = `BUY TO OPEN ${otype} @ ${fmt$(opp.ask)}`;
   const why =
     `Our model says this ${otype} is worth ${fmt$(opp.fair_value)} but the market is selling it ` +
     `for only ${fmt$(opp.ask)} — that's ${fmtPct0(opp.edge_pct)} cheaper than fair value. ` +
     `Think of it like finding a $100 item on sale for $${(100 * (1 - opp.edge_pct)).toFixed(0)}.`;
   const entry_instruction =
     `In your broker, search for ${opp.underlying} options expiring ${opp.expiration}. ` +
-    `Find the $${opp.strike} ${otype} strike. Place a LIMIT order (not market!) to BUY TO OPEN at ` +
+    `Find the $${opp.strike} ${otype} strike. Place a LIMIT order (not market!) to BUY TO OPEN the ${otype} at ` +
     `${fmt$(opp.ask)} or lower. You'll buy ${plan.suggested_contracts} contract(s) for a total of ` +
     `${fmt$(plan.total_cost_usd)} (${plan.suggested_contracts} × ${fmt$(plan.cost_per_contract_usd)}).`;
   const expected_profit =
@@ -262,17 +262,18 @@ function buildCoaching(opp, plan) {
     timeNote = `You have roughly ${hrs}h ${mins}m until market close. Check in every 15-30 minutes.`;
   }
   const exit_plan =
-    `As soon as your buy order fills, place a LIMIT SELL TO CLOSE at ${fmt$(plan.target_exit_price)} ` +
-    `(take-profit). If the option drops to ${fmt$(plan.stop_loss_price)} (half your cost), cut your ` +
-    `losses and sell. ${timeNote} Close ALL positions by 3:45 PM ET no matter what — holding past ` +
+    `As soon as your BUY TO OPEN order fills, place a LIMIT SELL TO CLOSE order on the same ` +
+    `${otype} at ${fmt$(plan.target_exit_price)} (take-profit). If the option drops to ` +
+    `${fmt$(plan.stop_loss_price)} (half your cost), SELL TO CLOSE to cut your losses. ` +
+    `${timeNote} SELL TO CLOSE all positions by 3:45 PM ET no matter what — holding past ` +
     `that risks automatic exercise and unexpected assignment.`;
 
   const watch_list = [
     Math.abs(opp.delta) < 0.5
       ? `📈 ${opp.underlying} stock price — you need it to move ${direction} toward $${opp.strike}`
       : `📈 ${opp.underlying} stock price — it's already near your strike, keep it moving ${direction}`,
-    `💰 Option bid price — sell when it hits ${fmt$(plan.target_exit_price)} or higher`,
-    `🛑 Cut losses if option price drops to ${fmt$(plan.stop_loss_price)}`,
+    `💰 Option bid price — SELL TO CLOSE when it hits ${fmt$(plan.target_exit_price)} or higher`,
+    `🛑 SELL TO CLOSE to cut losses if option price drops to ${fmt$(plan.stop_loss_price)}`,
     `⏰ Time decay is your enemy — this ${otype} loses ${fmt$(Math.abs(opp.theta_per_day))}/day (accelerating)`,
     `📊 Volume: ${opp.volume.toLocaleString()} traded today — ${opp.volume >= 200 ? 'good liquidity' : 'decent liquidity, watch bid-ask spread'}`,
   ];

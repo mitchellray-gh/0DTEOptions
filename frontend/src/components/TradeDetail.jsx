@@ -20,7 +20,7 @@ export default function TradeDetail({ item }) {
       <h2>{p.side_human}</h2>
       <div className="sym">{p.contract_symbol}</div>
 
-      <div className="action">{p.action.replace('_', ' ')} @ {fmt$(p.limit_price)}</div>
+      <div className="action">{p.action.replace('_', ' ')} {o.option_type.toUpperCase()} @ {fmt$(p.limit_price)}</div>
 
       <h3>Trade plan</h3>
       <div className="row"><span className="k">Contracts</span><span className="v">{p.suggested_contracts}</span></div>

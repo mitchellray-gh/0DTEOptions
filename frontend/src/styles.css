@@ -491,6 +491,10 @@ tr.coaching-row:hover td {
   padding: 16px 20px;
   border-left: 3px solid var(--accent);
   animation: coachSlide 0.2s ease-out;
+  /* Inherited `white-space: nowrap` from the base table cells would force the
+     plan onto one very wide line and push it off-screen — keep it wrapping. */
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 @keyframes coachSlide {
   from { opacity: 0; max-height: 0; }
