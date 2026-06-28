@@ -101,20 +101,20 @@ export default function OpportunityTable({ items, selected, onSelect, filters })
             return (
               <React.Fragment key={o.symbol}>
                 <tr className={`${isSel ? 'selected' : ''} ${isExpanded ? 'expanded-parent' : ''}`} onClick={() => handleRowClick(it)}>
-                  <td>
+                  <td className="cell-action" data-label="Action">
                     <span className="action-pill">{c ? c.action_summary : `Buy ${o.option_type.toUpperCase()}`}</span>
                   </td>
-                  <td><strong>{o.underlying}</strong></td>
-                  <td><span className={`badge ${o.option_type}`}>{o.option_type.toUpperCase()}</span></td>
-                  <td>{fmt$(o.strike)}</td>
-                  <td>{fmt$(o.underlying_price)}</td>
-                  <td>{fmt$(o.bid)} / {fmt$(o.ask)}</td>
-                  <td>{fmt$(o.fair_value)}</td>
-                  <td className="edge-pos">{fmtPct(o.edge_pct)}</td>
-                  <td>{o.delta.toFixed(2)}</td>
-                  <td>{o.volume.toLocaleString()}</td>
-                  <td>{o.score.toFixed(1)}</td>
-                  <td className="expand-arrow">{isExpanded ? '▲' : '▼'}</td>
+                  <td data-label="Underlying"><strong>{o.underlying}</strong></td>
+                  <td data-label="Type"><span className={`badge ${o.option_type}`}>{o.option_type.toUpperCase()}</span></td>
+                  <td data-label="Strike">{fmt$(o.strike)}</td>
+                  <td data-label="Spot">{fmt$(o.underlying_price)}</td>
+                  <td data-label="Bid / Ask">{fmt$(o.bid)} / {fmt$(o.ask)}</td>
+                  <td data-label="Fair">{fmt$(o.fair_value)}</td>
+                  <td className="edge-pos" data-label="Edge">{fmtPct(o.edge_pct)}</td>
+                  <td data-label="Δ">{o.delta.toFixed(2)}</td>
+                  <td data-label="Vol">{o.volume.toLocaleString()}</td>
+                  <td data-label="Score">{o.score.toFixed(1)}</td>
+                  <td className="expand-arrow" data-label="Details">{isExpanded ? '▲ Hide' : '▼ Tap for trade plan'}</td>
                 </tr>
                 {isExpanded && (
                   <tr className="coaching-row">
