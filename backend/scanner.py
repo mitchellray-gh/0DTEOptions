@@ -477,10 +477,10 @@ def _build_plan(opp: Opportunity, account_size_usd: float = 5_000.0,
     steps = [
         f"1. In your broker, open the options chain for {opp.underlying} expiring {opp.expiration}.",
         f"2. Select the ${opp.strike:g} {opp.option_type.upper()} contract ({opp.symbol}).",
-        f"3. Place a LIMIT BUY-TO-OPEN order for {contracts} contract(s) at ${opp.ask:.2f} or better.",
-        f"4. Immediately stage a LIMIT SELL-TO-CLOSE at ${target_exit:.2f} (take-profit).",
-        f"5. Set a mental/alert stop at ${stop_price:.2f} (≈50% of premium); close manually if hit.",
-        f"6. Plan to flatten any remaining position by 15:45 ET to avoid pin / assignment risk.",
+        f"3. Place a LIMIT BUY-TO-OPEN order for {contracts} {opp.option_type.upper()} contract(s) at ${opp.ask:.2f} or better.",
+        f"4. Immediately stage a LIMIT SELL-TO-CLOSE order on the same {opp.option_type.upper()} at ${target_exit:.2f} (take-profit).",
+        f"5. Set a stop at ${stop_price:.2f} (≈50% of premium); SELL-TO-CLOSE manually if hit.",
+        f"6. SELL-TO-CLOSE any remaining position by 15:45 ET to avoid pin / assignment risk.",
     ]
 
     return TradePlan(
