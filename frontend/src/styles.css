@@ -111,7 +111,9 @@ header .subtitle {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 8px;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
 }
 table {
   width: 100%;
@@ -867,4 +869,24 @@ tr.coaching-row:hover td {
   tr.coaching-row td { padding: 0; }
   .coaching-panel { padding: 14px; }
   .coaching-badges { flex-wrap: wrap; }
+
+  /* Glossary: stack term over definition so nothing is cramped/clipped */
+  .rej-glossary-grid { grid-template-columns: 1fr; gap: 0; }
+  .rej-glossary-grid > div:nth-child(odd) { margin-top: 8px; }
+
+  /* Filter-insights header wraps instead of squashing the toggle */
+  .rej-widget-header { flex-wrap: wrap; gap: 8px; }
+
+  /* Long pass/fail labels in the overview bar should not overflow */
+  .rej-overview-bar { font-size: 10px; }
+  .rej-overview-pass, .rej-overview-fail {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 0 4px;
+  }
+
+  /* Trade-detail key/value rows wrap on very narrow screens */
+  .detail .row { flex-wrap: wrap; gap: 2px 12px; }
+  .detail .row .v { word-break: break-word; }
 }
