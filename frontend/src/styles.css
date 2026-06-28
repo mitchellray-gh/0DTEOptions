@@ -744,3 +744,127 @@ tr.coaching-row:hover td {
   border-color: #fde68a;
   color: #92400e;
 }
+
+/* ════════════════════════════════════════════════════════════════════
+   Mobile optimization — responsive layout without losing functionality
+   ════════════════════════════════════════════════════════════════════ */
+
+/* Tablets / small laptops */
+@media (max-width: 768px) {
+  .app { padding: 16px; }
+
+  .app-header { flex-direction: column; align-items: flex-start; gap: 8px; }
+  .app-header .status { font-size: 13px; }
+
+  .card { padding: 14px; border-radius: 10px; }
+  .card-head { flex-wrap: wrap; gap: 8px; }
+  .head-actions { width: 100%; }
+  .head-actions .btn { flex: 1; }
+
+  .add-row { flex-wrap: wrap; }
+  .add-row input { max-width: none; }
+
+  /* Settings toolbar: two columns of equal-width fields */
+  .toolbar { gap: 10px; }
+  .toolbar .field { flex: 1 1 calc(50% - 5px); min-width: 0; }
+  .field input, .field select { min-width: 0; width: 100%; }
+}
+
+/* Phones */
+@media (max-width: 680px) {
+  .app { padding: 12px; }
+
+  .app-header .brand h1 { font-size: 20px; }
+
+  /* Larger, finger-friendly tap targets */
+  .btn { padding: 10px 16px; font-size: 14px; }
+  .chip { padding: 7px 8px 7px 14px; }
+  .chip button { width: 22px; height: 22px; font-size: 16px; }
+
+  /* The detail panel flows below the table instead of sticking */
+  .detail {
+    position: static;
+    max-height: none;
+    overflow: visible;
+  }
+
+  /* ── Transform the data table into stacked cards ───────────── */
+  .table-wrapper {
+    border: none;
+    background: transparent;
+    overflow: visible;
+  }
+  table, tbody, tr, td { display: block; width: 100%; }
+  thead { display: none; }
+  table { font-size: 14px; }
+
+  /* Each opportunity becomes its own card */
+  tbody tr:not(.coaching-row) {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: var(--shadow);
+    margin-bottom: 12px;
+    overflow: hidden;
+  }
+  tbody tr.expanded-parent { margin-bottom: 0; border-radius: 10px 10px 0 0; }
+  tr.selected td { background: transparent; }
+  tbody tr.selected:not(.coaching-row) { border-color: var(--accent); }
+  tr:hover td { background: transparent; }
+
+  /* Label / value rows inside each card */
+  tbody tr:not(.coaching-row) td {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    white-space: normal;
+    text-align: right;
+    padding: 9px 14px;
+    border-bottom: 1px solid var(--border);
+  }
+  tbody tr:not(.coaching-row) td:last-child { border-bottom: none; }
+  tbody tr:not(.coaching-row) td::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    text-align: left;
+    flex: 0 0 auto;
+  }
+
+  /* Action cell spans full attention at the top of the card */
+  td.cell-action { background: var(--panel-2); }
+  .action-pill {
+    max-width: none;
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    text-align: right;
+  }
+
+  /* Tap-to-expand affordance */
+  td.expand-arrow {
+    width: auto;
+    justify-content: center;
+    white-space: normal;
+    color: var(--link);
+    font-weight: 600;
+    cursor: pointer;
+  }
+  td.expand-arrow::before { content: none; }
+
+  /* Coaching detail attaches under its card */
+  tr.coaching-row {
+    border: 1px solid var(--accent);
+    border-top: none;
+    border-radius: 0 0 10px 10px;
+    margin-bottom: 12px;
+    overflow: hidden;
+  }
+  tr.coaching-row td { padding: 0; }
+  .coaching-panel { padding: 14px; }
+  .coaching-badges { flex-wrap: wrap; }
+}
