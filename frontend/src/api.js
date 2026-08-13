@@ -97,6 +97,14 @@ export async function fetchNews(tickers, { limit = 20 } = {}) {
   return getJSON(`/api/news?${qs.toString()}`, { timeoutMs: 30_000 });
 }
 
+/** Recent SEC EDGAR investor filings per ticker → { filings: {SYM: [...]}, notes }. */
+export async function fetchFilings(tickers, { limit = 6 } = {}) {
+  const list = (tickers || []).map((t) => t.trim().toUpperCase()).filter(Boolean);
+  if (!list.length) return { filings: {}, notes: [] };
+  const qs = new URLSearchParams({ tickers: list.join(','), limit: String(limit) });
+  return getJSON(`/api/filings?${qs.toString()}`, { timeoutMs: 30_000 });
+}
+
 /** Intraday bars for one past date, for the replay practice mode. */
 export async function fetchReplayDay(ticker, date) {
   const qs = new URLSearchParams({ ticker: ticker.trim().toUpperCase(), date });

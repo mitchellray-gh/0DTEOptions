@@ -16,6 +16,7 @@ from .backtest import BacktestConfig, run_backtest
 from .scanner import (
     DEFAULT_RISK_FREE_RATE,
     fetch_chains,
+    fetch_filings,
     fetch_history,
     fetch_intraday_for_date,
     fetch_news,
@@ -205,6 +206,38 @@ async def news(
         "notes": notes,
     }
     _news_cache[key] = (time.time(), response)
+    return response
+
+
+_filings_cache: dict[str, tuple[float, dict]] = {}
+_FILINGS_CACHE_TTL_SECONDS = 900.0  # filings change slowly
+
+
+@app.get("/api/filings")
+async def filings(
+    tickers: Optional[str] = Query(None, description="Comma-separated tickers. Max 15."),
+    limit: int = Query(6, ge=1, le=20),
+    nocache: bool = Query(False),
+) -> dict:
+    """Recent SEC EDGAR investor filings (10-K/10-Q/8-K/proxy/etc.) per ticker."""
+    parsed = _parse_tickers(tickers, 15)
+    key = f"{','.join(parsed)}:{limit}"
+    now = time.time()
+    cached = _filings_cache.get(key)
+    if cached and not nocache and (now - cached[0]) < _FILINGS_CACHE_TTL_SECONDS:
+        return cached[1]
+    try:
+        loop = asyncio.get_event_loop()
+        by_ticker, notes = await loop.run_in_executor(None, lambda: fetch_filings(parsed, limit))
+    except Exception as exc:  # noqa: BLE001
+        log.exception("Filings fetch failed")
+        raise HTTPException(500, f"Filings fetch failed: {exc}") from exc
+    response = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "filings": by_ticker,
+        "notes": notes,
+    }
+    _filings_cache[key] = (time.time(), response)
     return response
 
 

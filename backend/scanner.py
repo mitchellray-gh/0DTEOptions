@@ -33,6 +33,7 @@ import pandas as pd
 import yfinance as yf
 
 from . import yahoo
+from . import edgar
 from .models import Opportunity, RejectedContract, TradePlan
 from .pricing import bs_greeks, bs_price, implied_vol
 from .sp500 import fetch_sp500_tickers
@@ -871,4 +872,28 @@ def fetch_news(tickers: list[str], limit: int = 20) -> tuple[list[dict], list[st
         return it.get("published_at") or ""
     items.sort(key=_key, reverse=True)
     return items[:limit], notes
+
+
+def fetch_filings(tickers: list[str], limit_per: int = 6) -> tuple[dict[str, list], list[str]]:
+    """Recent SEC EDGAR investor filings for each ticker, fetched in parallel.
+
+    Returns ``({SYM: [ {form, description, filed, title, link} ]}, notes)``.
+    Tickers without filings (e.g. many ETFs) simply map to an empty list.
+    """
+    out: dict[str, list] = {}
+    notes: list[str] = []
+
+    def _one(ticker: str):
+        try:
+            return ticker, edgar.filings(ticker, limit=limit_per), None
+        except Exception as exc:  # noqa: BLE001
+            return ticker, [], f"{ticker}: filings error — {exc}"
+
+    workers = min(_MAX_WORKERS, max(len(tickers), 1))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for tkr, docs, note in pool.map(_one, tickers):
+            out[tkr] = docs
+            if note:
+                notes.append(note)
+    return out, notes
 

@@ -105,6 +105,7 @@ The API exposes:
 - `GET /api/quote?tickers=SPY,QQQ` — lightweight last-price snapshot for auto-refreshing quotes/sparklines. Cached ~8s.
 - `GET /api/history?ticker=SPY&range=1d` — OHLC bars for the price chart (`range` ∈ `1d,5d,1mo,3mo,6mo,1y,ytd`). Cached ~30s.
 - `GET /api/news?tickers=SPY,QQQ&limit=20` — recent news headlines for the Discover feed. Cached ~120s.
+- `GET /api/filings?tickers=SPY,QQQ&limit=6` — recent SEC EDGAR investor filings (10-K/10-Q/8-K/proxy/prospectus) per ticker, linked to primary documents. Cached ~15min.
 - `GET /api/replay/day?ticker=SPY&date=YYYY-MM-DD` — intraday bars for one past date (last ~30 days) driving the replay practice mode.
 - `POST /api/backtest` — see [Backtesting](#backtesting).
 

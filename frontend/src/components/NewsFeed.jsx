@@ -1,7 +1,7 @@
 // Reusable Robinhood-style news feed. Fetches recent headlines for a list of
 // tickers from /api/news and renders them with thumbnails, source, and age.
 import React, { useEffect, useState } from 'react';
-import { fetchNews } from '../api.js';
+import { fetchNews, fetchFilings } from '../api.js';
 
 export function timeAgo(iso) {
   if (!iso) return '';
@@ -21,11 +21,13 @@ export function timeAgo(iso) {
  * @param {boolean}  showTickers  render per-story ticker tags (useful for a
  *                                multi-symbol feed; off for a single instrument)
  * @param {string}   emptyText    message when there are no headlines
+ * @param {boolean}  showFilings  also fetch + render SEC investor filings
  */
-export default function NewsFeed({ tickers, limit = 20, showTickers = true, emptyText }) {
+export default function NewsFeed({ tickers, limit = 20, showTickers = true, emptyText, showFilings = true }) {
   const [items, setItems] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [filings, setFilings] = useState({});
   const key = (tickers || []).join(',');
 
   useEffect(() => {
@@ -40,9 +42,22 @@ export default function NewsFeed({ tickers, limit = 20, showTickers = true, empt
     return () => { cancelled = true; };
   }, [key, limit]);
 
+  useEffect(() => {
+    if (!showFilings || !key) { setFilings({}); return undefined; }
+    let cancelled = false;
+    fetchFilings(key.split(','), { limit: 6 })
+      .then((d) => { if (!cancelled) setFilings(d.filings || {}); })
+      .catch(() => { /* filings are supplementary — ignore failures */ });
+    return () => { cancelled = true; };
+  }, [key, showFilings]);
+
+  const allFilings = Object.entries(filings)
+    .flatMap(([sym, docs]) => (docs || []).map((d) => ({ ...d, sym })))
+    .sort((a, b) => String(b.filed || '').localeCompare(String(a.filed || '')));
+
   if (loading && !items) return <div className="rh-empty">Loading headlines…</div>;
   if (error) return <div className="banner error">⚠️ {error}</div>;
-  if (items && !items.length) {
+  if (items && !items.length && !allFilings.length) {
     return <div className="rh-empty">{emptyText || 'No recent headlines.'}</div>;
   }
 
@@ -69,6 +84,31 @@ export default function NewsFeed({ tickers, limit = 20, showTickers = true, empt
           {item.thumbnail && <img src={item.thumbnail} alt="" loading="lazy" />}
         </a>
       ))}
+
+      {allFilings.length > 0 && (
+        <>
+          <div className="rh-filings-head">📄 Investor filings (SEC EDGAR)</div>
+          {allFilings.map((f, i) => (
+            <a
+              key={`${f.sym}-${f.link}-${i}`}
+              className="rh-filing"
+              href={f.link}
+              target="_blank"
+              rel="noreferrer noopener"
+            >
+              <span className="rh-filing-form">{f.form}</span>
+              <span className="rh-filing-body">
+                <span className="rh-filing-desc">
+                  {showTickers && <span className="rh-news-ticker">{f.sym}</span>}
+                  {f.description}
+                </span>
+                <span className="rh-filing-date">Filed {f.filed}</span>
+              </span>
+              <span className="rh-filing-open">Open ↗</span>
+            </a>
+          ))}
+        </>
+      )}
     </>
   );
 }
