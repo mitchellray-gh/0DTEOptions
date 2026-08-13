@@ -136,6 +136,8 @@ def main(argv=None):
     p.add_argument("--profit-target", type=float, default=0.55)
     p.add_argument("--stop-multiple", type=float, default=2.0)
     p.add_argument("--max-per-day", type=int, default=2)
+    p.add_argument("--account-size", type=float, default=5_000.0)
+    p.add_argument("--risk-pct", type=float, default=0.02)
     p.add_argument("--gbm-start-price", type=float, default=560.0)
     p.add_argument("--gbm-vol", type=float, default=0.18)
     p.add_argument("--base-iv", type=float, default=0.20)
@@ -149,6 +151,7 @@ def main(argv=None):
     for sd in seeds:
         cfg = BacktestConfig(
             source=a.source, tickers=tickers, days=a.days, seed=sd,
+            account_size=a.account_size, risk_per_trade_pct=a.risk_pct,
             gbm_start_price=a.gbm_start_price, gbm_annual_vol=a.gbm_vol,
             base_iv=a.base_iv,
         ).normalized()
@@ -177,6 +180,11 @@ def main(argv=None):
     print(f"  Profit factor  : {'inf' if pf == float('inf') else f'{pf:.2f}'}")
     print(f"  Avg win / loss : ${m['avg_win']:.2f} / ${m['avg_loss']:.2f}")
     print(f"  Exit reasons   : {m['reasons']}")
+    print("-" * 60)
+    start = a.account_size
+    final = start + m["net"]
+    print(f"  Starting equity: ${start:,.2f}")
+    print(f"  Final equity   : ${final:,.2f}  ({(final/start-1)*100:+.1f}%)")
     if len(per_seed) > 1:
         print("-" * 60)
         for sd, s in per_seed:
@@ -184,7 +192,8 @@ def main(argv=None):
                 print(f"  seed {sd:<5}: win {s['win_rate']*100:5.1f}%  "
                       f"net ${s['net']:>9.2f}  ({s['trades']} trades)")
     print("-" * 60)
-    print("  SIMULATION ONLY — synthetic 0DTE chains, not live option quotes.")
+    print("  SIMULATION — real SPY daily bars, SYNTHETIC 0DTE option chains "
+          "(real intraday option quotes aren't free). Not investment advice.")
     return 0
 
 

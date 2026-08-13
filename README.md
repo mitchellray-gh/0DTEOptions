@@ -104,6 +104,12 @@ uvicorn backend.main:app --reload --port 8000
 > ```
 > Vercel doesn't need this.
 
+> **Option chains come from CBOE first.** For option chains the app uses CBOE's
+> free ~15-min-delayed feed (`backend/cboe.py`) — real exchange **bid/ask, IV,
+> and greeks** (delta/gamma/theta/vega), richer than yfinance's scraped chain —
+> and falls back to Yahoo only when CBOE has no data for a symbol. Underlying
+> quotes/charts/history/news still come from Yahoo.
+
 The API exposes:
 
 - `GET /api/health`

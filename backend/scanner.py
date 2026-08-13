@@ -34,6 +34,7 @@ import yfinance as yf
 
 from . import yahoo
 from . import edgar
+from . import cboe
 from .models import Opportunity, RejectedContract, TradePlan
 from .pricing import bs_greeks, bs_price, implied_vol
 from .sp500 import fetch_sp500_tickers
@@ -652,6 +653,16 @@ def fetch_chains(tickers: list[str] | None = None,
     notes: list[str] = []
 
     def _fetch_one(ticker: str):
+        # Prefer CBOE (real exchange bid/ask/IV/greeks); fall back to yfinance.
+        try:
+            chain = cboe.fetch_chain(ticker)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("CBOE fetch failed for %s: %s", ticker, exc)
+            chain = None
+        if chain and (chain.get("calls") or chain.get("puts")):
+            note = (f"{ticker}: spot=${chain['spot']:.2f}, expiry={chain['expiration']}, "
+                    f"mins_left={chain['minutes_to_expiry']} (cboe)")
+            return chain, note
         return _fetch_chain_yahoo(ticker, now)
 
     workers = min(_MAX_WORKERS, max(len(unique_tickers), 1))
