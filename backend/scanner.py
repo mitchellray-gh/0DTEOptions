@@ -669,38 +669,54 @@ def fetch_quotes(tickers: list[str]) -> tuple[dict[str, dict], list[str]]:
     """Return a lightweight last-price snapshot for each ticker.
 
     ``{ "SPY": {"price": 452.1, "prev_close": 450.0, "change": 2.1,
-                "change_pct": 0.0047, "currency": "USD"} }``
+                "change_pct": 0.0047} }``
 
-    Uses ``fast_info`` (one HTTP call per ticker) and falls back to a 1-day
-    history bar if fast_info is missing. Failures are collected as notes and
-    simply omitted from the result — the caller renders what it gets.
+    Resolves the entire watchlist in ONE batched Yahoo request (fast). Falls
+    back to per-ticker chart requests only if the batch call fails.
     """
     out: dict[str, dict] = {}
     notes: list[str] = []
 
+    def _pack(price: float, prev: float) -> dict:
+        if prev <= 0:
+            prev = price
+        change = price - prev
+        return {
+            "price": round(price, 4),
+            "prev_close": round(prev, 4),
+            "change": round(change, 4),
+            "change_pct": round(change / prev if prev else 0.0, 6),
+        }
+
+    # Fast path: one batched request for the whole list.
+    try:
+        batch = yahoo.quotes(tickers)
+        for sym, q in batch.items():
+            price = _row_float(q.get("price"))
+            if price > 0:
+                out[sym] = _pack(price, _row_float(q.get("prev_close")))
+    except Exception as exc:  # noqa: BLE001
+        notes.append(f"batch quote failed, falling back — {exc}")
+
+    missing = [t for t in tickers if t not in out]
+    if not missing:
+        return out, notes
+
+    # Fallback: per-ticker chart meta for anything the batch missed.
     def _one(ticker: str):
         try:
             meta = yahoo.chart(ticker, "1d", "5m").get("meta") or {}
             price = _row_float(meta.get("regularMarketPrice"))
-            prev = _row_float(meta.get("chartPreviousClose") or meta.get("previousClose"))
             if price <= 0:
                 return ticker, None, f"{ticker}: no quote available"
-            if prev <= 0:
-                prev = price
-            change = price - prev
-            change_pct = change / prev if prev else 0.0
-            return ticker, {
-                "price": round(price, 4),
-                "prev_close": round(prev, 4),
-                "change": round(change, 4),
-                "change_pct": round(change_pct, 6),
-            }, None
+            prev = _row_float(meta.get("chartPreviousClose") or meta.get("previousClose"))
+            return ticker, _pack(price, prev), None
         except Exception as exc:  # noqa: BLE001
             return ticker, None, f"{ticker}: quote error — {exc}"
 
-    workers = min(_MAX_WORKERS, max(len(tickers), 1))
+    workers = min(_MAX_WORKERS, max(len(missing), 1))
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(_one, t): t for t in tickers}
+        futures = {pool.submit(_one, t): t for t in missing}
         for fut in as_completed(futures):
             ticker, quote, note = fut.result()
             if quote is not None:
@@ -783,12 +799,24 @@ def fetch_news(tickers: list[str], limit: int = 20) -> tuple[list[dict], list[st
     notes: list[str] = []
     seen: set[str] = set()
 
-    for ticker in tickers:
+    # Fetch each ticker's headlines in parallel, then merge deterministically.
+    raw_by_ticker: dict[str, list] = {}
+    workers = min(_MAX_WORKERS, max(len(tickers), 1))
+
+    def _fetch(ticker: str):
         try:
-            raw = yahoo.search_news(ticker, count=max(limit, 10))
+            return ticker, yahoo.search_news(ticker, count=max(limit, 10)), None
         except Exception as exc:  # noqa: BLE001
-            notes.append(f"{ticker}: news error — {exc}")
-            continue
+            return ticker, [], f"{ticker}: news error — {exc}"
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for tkr, raw, note in pool.map(_fetch, tickers):
+            raw_by_ticker[tkr] = raw
+            if note:
+                notes.append(note)
+
+    for ticker in tickers:
+        raw = raw_by_ticker.get(ticker) or []
         for entry in raw:
             content = entry.get("content", entry) if isinstance(entry, dict) else {}
             title = content.get("title") or entry.get("title")

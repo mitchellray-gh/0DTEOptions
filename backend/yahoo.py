@@ -122,6 +122,33 @@ def options(symbol: str, date_epoch: int | None = None) -> dict:
     return results[0]
 
 
+def quotes(symbols: list[str]) -> dict[str, dict]:
+    """Batch last-price snapshot for many symbols in ONE request (needs crumb).
+
+    Returns ``{SYM: {price, prev_close}}``. Far faster than one chart request
+    per ticker — the whole watchlist resolves in a single round-trip.
+    """
+    if not symbols:
+        return {}
+    j = _get_json(
+        f"{_Q1}/v7/finance/quote",
+        {"symbols": ",".join(symbols)},
+        use_crumb=True,
+    )
+    out: dict[str, dict] = {}
+    for q in (j.get("quoteResponse") or {}).get("result") or []:
+        sym = q.get("symbol")
+        price = q.get("regularMarketPrice")
+        if not sym or price is None:
+            continue
+        prev = q.get("regularMarketPreviousClose") or q.get("chartPreviousClose")
+        out[str(sym)] = {
+            "price": float(price),
+            "prev_close": float(prev) if prev is not None else float(price),
+        }
+    return out
+
+
 def search_news(symbol: str, count: int = 10) -> list[dict]:
     """Return recent news items for a symbol via the search endpoint."""
     j = _get_json(
