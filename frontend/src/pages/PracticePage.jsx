@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { fetchReplayDay } from '../api.js';
+import Sparkline from '../components/Sparkline.jsx';
 import { scanChains } from '../lib/scanner.js';
 import { buildSyntheticChain } from '../lib/replaySim.js';
 import {
@@ -142,6 +143,7 @@ function Replay() {
   const [idx, setIdx] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(4);
+  const [selectedPosId, setSelectedPosId] = useState(null);
   const timer = useRef(null);
 
   // In-memory replay portfolio (not persisted).
@@ -151,6 +153,7 @@ function Replay() {
     setLoading(true);
     setNote(null);
     setPlaying(false);
+    setSelectedPosId(null);
     fetchReplayDay(ticker, date)
       .then((d) => {
         setBars(d.bars || []);
@@ -199,11 +202,46 @@ function Replay() {
 
   const buy = (o) => {
     const res = buyToOpen(session, o, 1, { price: o.ask });
-    if (res.ok) setSession(res.state);
+    if (res.ok) {
+      // Tag the freshly opened position with WHERE in the replay it was added,
+      // so we can track its profitability from that exact moment onward.
+      const positions = res.state.positions.slice();
+      const last = positions[positions.length - 1];
+      positions[positions.length - 1] = {
+        ...last, entryIdx: idx, entryClock: clock, entrySpot: spot,
+      };
+      setSession({ ...res.state, positions });
+    }
   };
   const sell = (id, price) => {
     const res = sellToClose(session, id, price);
-    if (res.ok) setSession(res.state);
+    if (res.ok) {
+      if (selectedPosId === id) setSelectedPosId(null);
+      setSession(res.state);
+    }
+  };
+
+  // Reprice a position across every bar from its entry to the current bar so we
+  // can chart its P&L since it was added.
+  const pnlSince = (pos) => {
+    if (pos.entryIdx == null || !bars) return { series: [], peak: 0, trough: 0, held: 0 };
+    const series = [];
+    let peak = -Infinity;
+    let trough = Infinity;
+    for (let k = pos.entryIdx; k <= Math.min(idx, total - 1); k += 1) {
+      const s = Number(bars[k].c);
+      const ml = Math.max((total - k) * 5, 1);
+      const pnl = markPosition(pos, { spot: s, minutesLeft: ml }).unrealizedPnl;
+      series.push(pnl);
+      if (pnl > peak) peak = pnl;
+      if (pnl < trough) trough = pnl;
+    }
+    return {
+      series,
+      peak: peak === -Infinity ? 0 : peak,
+      trough: trough === Infinity ? 0 : trough,
+      held: Math.max(idx - pos.entryIdx, 0),
+    };
   };
 
   return (
@@ -270,19 +308,62 @@ function Replay() {
           })}
 
           <h3>Session positions</h3>
-          {!marks.length && <div className="rh-empty">No positions yet.</div>}
-          {marks.map(({ pos, m }) => (
-            <div key={pos.id} className="rh-row" style={{ cursor: 'default' }}>
-              <div className="rh-col">
-                <span className="rh-sym">${pos.strike} {pos.optionType.toUpperCase()}</span>
-                <span className="rh-name">{pos.contracts}x @ {fmt$(pos.entryPrice)} · now {fmt$(m.markPrice)}</span>
+          {!marks.length && <div className="rh-empty">No positions yet. Buy a contract above, then tap it to track its P&L since entry.</div>}
+          {marks.map(({ pos, m }) => {
+            const active = pos.id === selectedPosId;
+            return (
+              <button
+                key={pos.id}
+                className="rh-row"
+                style={active ? { borderBottom: '1px solid var(--accent)' } : undefined}
+                onClick={() => setSelectedPosId(active ? null : pos.id)}
+              >
+                <div className="rh-col">
+                  <span className="rh-sym">${pos.strike} <span className={`badge ${pos.optionType}`}>{pos.optionType.toUpperCase()}</span></span>
+                  <span className="rh-name">added {pos.entryClock || '—'} · {pos.contracts}x @ {fmt$(pos.entryPrice)} · now {fmt$(m.markPrice)}</span>
+                </div>
+                <div className="rh-quote">
+                  <div className="rh-price" style={{ color: m.unrealizedPnl >= 0 ? 'var(--up)' : 'var(--down)' }}>{fmt$(m.unrealizedPnl)}</div>
+                  <div className={`rh-pct ${m.unrealizedPnl >= 0 ? 'up-fg' : 'down-fg'}`}>{pctSigned(m.unrealizedPct)}</div>
+                </div>
+                <span
+                  role="button"
+                  tabIndex={-1}
+                  className="rh-btn danger sm"
+                  style={{ marginLeft: 8 }}
+                  onClick={(e) => { e.stopPropagation(); sell(pos.id, m.markPrice); }}
+                >
+                  Sell
+                </span>
+              </button>
+            );
+          })}
+
+          {selectedPosId && (() => {
+            const entry = marks.find((x) => x.pos.id === selectedPosId);
+            if (!entry) return null;
+            const { pos, m } = entry;
+            const { series, peak, trough, held } = pnlSince(pos);
+            return (
+              <div className="rh-coach" style={{ marginTop: 12 }}>
+                <h4>${pos.strike} {pos.optionType.toUpperCase()} · P&L since {pos.entryClock || 'entry'}</h4>
+                <div style={{ height: 60, margin: '4px 0 12px' }}>
+                  <Sparkline points={series} up={m.unrealizedPnl >= 0} width={320} height={60} />
+                </div>
+                <div className="rh-stats" style={{ marginTop: 0 }}>
+                  <div className="rh-stat"><div className="k">Entry @ {pos.entryClock || '—'}</div><div className="v">{fmt$(pos.entryPrice)}</div></div>
+                  <div className="rh-stat"><div className="k">Now @ {clock}</div><div className="v">{fmt$(m.markPrice)}</div></div>
+                  <div className="rh-stat"><div className="k">Unrealized P&L</div><div className="v" style={{ color: m.unrealizedPnl >= 0 ? 'var(--up)' : 'var(--down)' }}>{fmt$(m.unrealizedPnl)} ({pctSigned(m.unrealizedPct)})</div></div>
+                  <div className="rh-stat"><div className="k">Bars held</div><div className="v">{held}</div></div>
+                  <div className="rh-stat"><div className="k">Peak gain</div><div className="v up-fg">{fmt$(peak)}</div></div>
+                  <div className="rh-stat"><div className="k">Max drawdown</div><div className="v down-fg">{fmt$(trough)}</div></div>
+                </div>
+                <p className="rh-lead" style={{ marginTop: 8 }}>
+                  Underlying was {fmt$(pos.entrySpot)} when you added this; it's {fmt$(spot)} now.
+                </p>
               </div>
-              <div className="rh-quote">
-                <div className="rh-price" style={{ color: m.unrealizedPnl >= 0 ? 'var(--up)' : 'var(--down)' }}>{fmt$(m.unrealizedPnl)}</div>
-              </div>
-              <button className="rh-btn danger sm" style={{ marginLeft: 8 }} onClick={() => sell(pos.id, m.markPrice)}>Sell</button>
-            </div>
-          ))}
+            );
+          })()}
         </>
       )}
     </>
