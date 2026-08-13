@@ -1,9 +1,10 @@
 fastapi>=0.110.0
-yfinance>=0.2.40,<0.3
+yfinance>=0.2.40,<0.2.52
 numpy>=1.26.0,<2.0.0
 pandas>=2.2.0,<2.3.0
 python-dateutil>=2.9.0
 pydantic>=2.6.0
+lxml>=5.0.0
 html5lib>=1.1
 beautifulsoup4>=4.12.0
 requests>=2.31.0
