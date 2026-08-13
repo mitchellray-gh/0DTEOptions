@@ -48,7 +48,10 @@ def fetch_sp500_tickers(force: bool = False) -> list[str]:
 
 def _fetch_from_wikipedia() -> list[str] | None:
     try:
-        tables = pd.read_html(_WIKI_URL, header=0)
+        # Use the pure-Python html5lib parser (not lxml) so the Vercel bundle
+        # stays under the serverless size limit. A hardcoded fallback below
+        # covers the case where scraping fails.
+        tables = pd.read_html(_WIKI_URL, header=0, flavor="html5lib")
         df = tables[0]
         # The ticker column is usually "Symbol"
         col = None
