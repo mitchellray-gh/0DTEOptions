@@ -11,9 +11,15 @@ Liquid US-listed underlyings (SPY, QQQ, IWM, DIA, …) now have option contracts
 ## Robinhood-style trainer UI
 
 The React front-end is a **Robinhood-lookalike training app** (dark theme,
-mobile-width layout, price charts, bottom tab bar) with five tabs:
+mobile-width layout, price charts, bottom tab bar) with six tabs:
 
 - **Invest** — watchlist with live sparklines & auto-refreshing quotes; tap a
+  symbol for its price chart (1D–1Y) and ranked 0DTE opportunities with plain-
+  English **coaching** on every pick (what/why, Greeks, risk, exit).
+- **Spreads** — ranked **defined-risk credit spreads** (the high-win-rate
+  strategy). Sells vertical spreads whose short strike likely expires OTM;
+  backtested to ~82% win rate at POP ≥ 85%, with max loss capped by the long
+  leg. Each pick shows POP, max profit/loss, breakeven, and management rules.
   symbol for its price chart (1D–1Y) and ranked 0DTE opportunities with plain-
   English **coaching** on every pick (what/why, Greeks, target, risk, exit).
 - **Practice** — a **virtual paper-trading** portfolio ($10k of pretend cash,
@@ -107,6 +113,7 @@ The API exposes:
 - `GET /api/news?tickers=SPY,QQQ&limit=20` — recent news headlines for the Discover feed. Cached ~120s.
 - `GET /api/filings?tickers=SPY,QQQ&limit=6` — recent SEC EDGAR investor filings (10-K/10-Q/8-K/proxy/prospectus) per ticker, linked to primary documents. Cached ~15min.
 - `GET /api/replay/day?ticker=SPY&date=YYYY-MM-DD` — intraday bars for one past date (last ~30 days) driving the replay practice mode.
+- `GET /api/spreads?tickers=SPY,QQQ&min_pop=0.85&max_width=5` — ranked 0DTE **defined-risk credit spreads** (the high-win-rate strategy). Cached ~20s.
 - `POST /api/backtest` — see [Backtesting](#backtesting).
 
 ### 2. Frontend

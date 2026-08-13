@@ -907,3 +907,41 @@ def fetch_filings(tickers: list[str], limit_per: int = 6) -> tuple[dict[str, lis
                 notes.append(note)
     return out, notes
 
+
+def fetch_spreads(tickers: list[str],
+                  account_size: float = 5_000.0,
+                  risk_per_trade_pct: float = 0.02,
+                  min_pop: float = 0.85,
+                  max_width: float = 5.0,
+                  max_results: int = 15,
+                  ) -> tuple[list[dict], list[str]]:
+    """Fetch 0DTE chains and build ranked defined-risk credit spreads.
+
+    This is the high-win-rate counterpart to the long-option scanner: instead of
+    buying premium (which structurally loses), it SELLS defined-risk vertical
+    credit spreads whose short strike has a low probability of finishing ITM.
+    Returns ``(spreads, notes)`` with spreads ranked by a POP-weighted score.
+    """
+    from . import spreads as _spreads  # local import avoids any cycle
+
+    chains, notes = fetch_chains(tickers)
+    out: list[dict] = []
+    for chain in chains:
+        found = _spreads.build_credit_spreads(
+            chain.get("calls", []), chain.get("puts", []),
+            float(chain.get("spot", 0.0)),
+            int(chain.get("minutes_to_expiry", 1)),
+            underlying=chain.get("underlying", ""),
+            expiration=chain.get("expiration", ""),
+            risk_free=DEFAULT_RISK_FREE_RATE,
+            account_size=account_size,
+            risk_per_trade_pct=risk_per_trade_pct,
+            max_width=max_width,
+            min_pop=min_pop,
+            max_results=max_results,
+        )
+        out.extend(s.to_dict() for s in found)
+    out.sort(key=lambda s: s["score"], reverse=True)
+    return out[:max_results], notes
+
+

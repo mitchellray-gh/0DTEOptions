@@ -4,6 +4,7 @@ import BottomNav from './components/BottomNav.jsx';
 import { useLiveQuotes } from './lib/useLiveQuotes.js';
 import InvestPage from './pages/InvestPage.jsx';
 import InstrumentPage from './pages/InstrumentPage.jsx';
+import SpreadsPage from './pages/SpreadsPage.jsx';
 import PracticePage from './pages/PracticePage.jsx';
 import LearnPage from './pages/LearnPage.jsx';
 import DiscoverPage from './pages/DiscoverPage.jsx';
@@ -26,6 +27,7 @@ function loadJSON(key, fallback) {
 const TITLES = {
   '/': ['Invest', 'Live 0DTE opportunities'],
   '/instrument': ['Invest', 'Instrument detail'],
+  '/spreads': ['Spreads', 'High win-rate credit spreads'],
   '/practice': ['Practice', 'Paper trade & replay'],
   '/learn': ['Learn', 'Master 0DTE options'],
   '/discover': ['Discover', 'News & analytics'],
@@ -90,6 +92,7 @@ export default function App() {
       <Route element={<Shell ctx={ctx} />}>
         <Route path="/" element={<InvestPage />} />
         <Route path="/instrument/:symbol" element={<InstrumentPage />} />
+        <Route path="/spreads" element={<SpreadsPage />} />
         <Route path="/practice" element={<PracticePage />} />
         <Route path="/learn" element={<LearnPage />} />
         <Route path="/discover" element={<DiscoverPage />} />

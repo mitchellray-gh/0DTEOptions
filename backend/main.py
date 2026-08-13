@@ -21,6 +21,7 @@ from .scanner import (
     fetch_intraday_for_date,
     fetch_news,
     fetch_quotes,
+    fetch_spreads,
 )
 from .sp500 import fetch_sp500_tickers
 
@@ -101,6 +102,52 @@ def sp500_tickers() -> dict:
     """Return the current S&P 500 ticker list."""
     tickers = fetch_sp500_tickers()
     return {"count": len(tickers), "tickers": tickers}
+
+
+_spreads_cache: dict[str, tuple[float, dict]] = {}
+_SPREADS_CACHE_TTL_SECONDS = 20.0
+
+
+@app.get("/api/spreads")
+async def spreads_endpoint(
+    tickers: Optional[str] = Query(None, description="Comma-separated tickers. Max 15."),
+    account_size: float = Query(5_000.0, ge=100.0, le=10_000_000.0),
+    risk_pct: float = Query(0.02, gt=0.0, le=1.0),
+    min_pop: float = Query(0.85, ge=0.5, le=0.99),
+    max_width: float = Query(5.0, gt=0.0, le=50.0),
+    nocache: bool = Query(False),
+) -> dict:
+    """Ranked 0DTE defined-risk credit spreads (the high-win-rate strategy).
+
+    Sells vertical credit spreads whose short strike has a low probability of
+    finishing in the money — modeled win probability >= ``min_pop``.
+    """
+    parsed = _parse_tickers(tickers, 15)
+    key = f"{','.join(parsed)}:{account_size}:{risk_pct}:{min_pop}:{max_width}"
+    now = time.time()
+    cached = _spreads_cache.get(key)
+    if cached and not nocache and (now - cached[0]) < _SPREADS_CACHE_TTL_SECONDS:
+        return cached[1]
+    try:
+        loop = asyncio.get_event_loop()
+        items, notes = await loop.run_in_executor(
+            None,
+            lambda: fetch_spreads(parsed, account_size, risk_pct, min_pop, max_width),
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.exception("Spread fetch failed")
+        raise HTTPException(500, f"Spread fetch failed: {exc}") from exc
+    response = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "spreads": items,
+        "notes": notes,
+        "disclaimer": (
+            "Defined-risk credit spreads: max loss is capped at width − credit. "
+            "Modeled win probability, not a guarantee. Educational use only."
+        ),
+    }
+    _spreads_cache[key] = (time.time(), response)
+    return response
 
 
 def _parse_tickers(tickers: Optional[str], max_n: int) -> list[str]:

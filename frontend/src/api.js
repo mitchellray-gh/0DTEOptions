@@ -97,6 +97,20 @@ export async function fetchNews(tickers, { limit = 20 } = {}) {
   return getJSON(`/api/news?${qs.toString()}`, { timeoutMs: 30_000 });
 }
 
+/** Ranked 0DTE defined-risk credit spreads (high win-rate strategy). */
+export async function fetchSpreads(tickers, { accountSize = 5000, riskPct = 0.02, minPop = 0.85, maxWidth = 5 } = {}) {
+  const list = (tickers || []).map((t) => t.trim().toUpperCase()).filter(Boolean);
+  if (!list.length) return { spreads: [], notes: [] };
+  const qs = new URLSearchParams({
+    tickers: list.join(','),
+    account_size: String(accountSize),
+    risk_pct: String(riskPct),
+    min_pop: String(minPop),
+    max_width: String(maxWidth),
+  });
+  return getJSON(`/api/spreads?${qs.toString()}`, { timeoutMs: 120_000 });
+}
+
 /** Recent SEC EDGAR investor filings per ticker → { filings: {SYM: [...]}, notes }. */
 export async function fetchFilings(tickers, { limit = 6 } = {}) {
   const list = (tickers || []).map((t) => t.trim().toUpperCase()).filter(Boolean);
