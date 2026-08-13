@@ -123,6 +123,7 @@ def _build_config(args: argparse.Namespace) -> BacktestConfig:
         risk_free_rate=args.risk_free_rate,
         max_trades_per_day=args.max_trades_per_day,
         take_fraction=args.take_fraction,
+        time_exit_frac=args.time_exit_frac,
         base_iv=args.base_iv,
         iv_noise=args.iv_noise,
         mean_reversion=args.mean_reversion,
@@ -162,6 +163,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--take-fraction", type=float, default=1.0,
                    help="Fraction of suggested trades to actually take (0-1), "
                         "e.g. 0.8 acts on ~80%% of signals.")
+    p.add_argument("--time-exit-frac", type=float, default=0.55,
+                   help="Close survivors at this fraction of the session "
+                        "(0<f<1); 1.0 holds to expiry.")
     p.add_argument("--base-iv", type=float, default=0.20)
     p.add_argument("--iv-noise", type=float, default=0.03)
     p.add_argument("--mean-reversion", type=float, default=0.6,

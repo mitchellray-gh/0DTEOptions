@@ -60,6 +60,11 @@ class BacktestConfig:
     commission_per_contract: float = 0.65   # charged on entry and exit
     exit_slippage_pct: float = 0.01         # haircut on take-profit / stop fills
 
+    # Mid-session time-exit: close survivors at this fraction of the session
+    # (0<f<1) instead of holding a 0DTE to a worthless expiry. 1.0 = hold to
+    # expiry. Mirrors scanner.TIME_EXIT_FRAC in the live plan.
+    time_exit_frac: float = 0.55
+
     # Fraction of the day's suggested trades to actually take (0-1). 1.0 takes
     # every top-N suggestion; e.g. 0.8 randomly acts on ~80% of them, modeling a
     # trader who skips some signals.

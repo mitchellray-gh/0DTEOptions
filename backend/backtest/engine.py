@@ -95,6 +95,7 @@ def run_backtest(cfg: BacktestConfig) -> BacktestResult:
                 minutes_to_expiry=minutes,
                 commission_per_contract=cfg.commission_per_contract,
                 exit_slippage_pct=cfg.exit_slippage_pct,
+                time_exit_frac=cfg.time_exit_frac,
             )
             trades.append(trade)
             day_pnl += trade.pnl_usd

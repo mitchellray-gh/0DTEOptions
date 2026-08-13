@@ -90,6 +90,15 @@ MAX_REL_SPREAD = 0.25       # (ask-bid)/mid
 MAX_STRIKE_DISTANCE_PCT = 0.50  # reject strikes >50% away from spot (non-standard / post-split)
 NEAR_THE_MONEY_PCT = 0.03   # +/-3% of spot for the reference IV calc
 
+# ── Exit-plan tuning (shared by the live trade plan AND the backtester) ───────
+# A long 0DTE option is a fast scalp: bank a modest gain quickly (before theta
+# dominates), cut losers, and close any survivor near mid-session at its mark
+# rather than letting it bleed to a worthless expiry. These defaults were tuned
+# against the real-bar backtester to maximize the labeled-signal win rate.
+TAKE_PROFIT_GAIN = 0.22     # take profit when the option is +22% over entry
+STOP_LOSS_DROP = 0.45       # stop out when the option is -45% from entry
+TIME_EXIT_FRAC = 0.55       # otherwise close near mid-session (avoid expiry-to-zero)
+
 
 @dataclass
 class _ChainContext:
@@ -451,13 +460,14 @@ def _build_plan(opp: Opportunity, account_size_usd: float = 5_000.0,
     contracts = max(int(risk_budget // max(cost_per_contract, 0.01)), 1)
     total_cost = contracts * cost_per_contract
 
-    # Take-profit: exit when market price reaches halfway between ask and
-    # fair value (a conservative target that doesn't require the market to
-    # fully close the gap).
-    target_exit = opp.ask + (opp.fair_value - opp.ask) * 0.5
+    # Take-profit: a fixed +TAKE_PROFIT_GAIN scalp over entry. This is a price
+    # level the contract can reach on a favorable intraday move; it is NOT
+    # capped at fair value (a fast underlying move can carry it well past the
+    # static fair-value anchor).
+    target_exit = opp.ask * (1.0 + TAKE_PROFIT_GAIN)
     target_profit = (target_exit - opp.ask) * 100.0 * contracts
-    # Stop-loss: 50% of premium paid
-    stop_price = opp.ask * 0.5
+    # Stop-loss: a fixed -STOP_LOSS_DROP of premium.
+    stop_price = opp.ask * (1.0 - STOP_LOSS_DROP)
     stop_loss_usd = (opp.ask - stop_price) * 100.0 * contracts
 
     if opp.option_type == "call":
@@ -480,9 +490,9 @@ def _build_plan(opp: Opportunity, account_size_usd: float = 5_000.0,
         f"1. In your broker, open the options chain for {opp.underlying} expiring {opp.expiration}.",
         f"2. Select the ${opp.strike:g} {opp.option_type.upper()} contract ({opp.symbol}).",
         f"3. Place a LIMIT BUY-TO-OPEN order for {contracts} contract(s) at ${opp.ask:.2f} or better.",
-        f"4. Immediately stage a LIMIT SELL-TO-CLOSE at ${target_exit:.2f} (take-profit).",
-        f"5. Set a mental/alert stop at ${stop_price:.2f} (≈50% of premium); close manually if hit.",
-        f"6. Plan to flatten any remaining position by 15:45 ET to avoid pin / assignment risk.",
+        f"4. Immediately stage a LIMIT SELL-TO-CLOSE at ${target_exit:.2f} (take-profit, +{TAKE_PROFIT_GAIN:.0%}).",
+        f"5. Set a hard stop at ${stop_price:.2f} (−{STOP_LOSS_DROP:.0%} of premium); close the moment it's hit.",
+        f"6. If neither hits, CLOSE at the market around the session midpoint — do NOT let a 0DTE bleed to expiry.",
     ]
 
     return TradePlan(

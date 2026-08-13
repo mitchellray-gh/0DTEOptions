@@ -15,6 +15,9 @@ export const MAX_REL_SPREAD = 0.25; // (ask-bid)/mid
 export const MAX_STRIKE_DISTANCE_PCT = 0.5; // reject strikes >50% from spot
 export const NEAR_THE_MONEY_PCT = 0.03; // ±3% for the reference-IV calc
 export const DEFAULT_RISK_FREE_RATE = 0.045;
+// Exit-plan tuning — kept in sync with backend/scanner.py.
+export const TAKE_PROFIT_GAIN = 0.22; // take profit at +22% over entry
+export const STOP_LOSS_DROP = 0.45;   // stop out at -45% from entry
 const YEAR_MINUTES = 60 * 24 * 365;
 
 const num = (v, d = 0) => {
@@ -177,9 +180,9 @@ function buildPlan(opp, accountSize = 5000, riskPct = 0.02) {
   const contracts = Math.max(Math.floor(riskBudget / Math.max(costPerContract, 0.01)), 1);
   const totalCost = contracts * costPerContract;
 
-  const targetExit = opp.ask + (opp.fair_value - opp.ask) * 0.5;
+  const targetExit = opp.ask * (1 + TAKE_PROFIT_GAIN);
   const targetProfit = (targetExit - opp.ask) * 100 * contracts;
-  const stopPrice = opp.ask * 0.5;
+  const stopPrice = opp.ask * (1 - STOP_LOSS_DROP);
   const stopLossUsd = (opp.ask - stopPrice) * 100 * contracts;
 
   let breakeven;
@@ -203,9 +206,9 @@ function buildPlan(opp, accountSize = 5000, riskPct = 0.02) {
     `1. In your broker, open the options chain for ${opp.underlying} expiring ${opp.expiration}.`,
     `2. Select the $${opp.strike} ${opp.option_type.toUpperCase()} contract (${opp.symbol}).`,
     `3. Place a LIMIT BUY-TO-OPEN order for ${contracts} contract(s) at ${fmt$(opp.ask)} or better.`,
-    `4. Immediately stage a LIMIT SELL-TO-CLOSE at ${fmt$(targetExit)} (take-profit).`,
-    `5. Set a mental/alert stop at ${fmt$(stopPrice)} (≈50% of premium); close manually if hit.`,
-    `6. Plan to flatten any remaining position by 15:45 ET to avoid pin / assignment risk.`,
+    `4. Immediately stage a LIMIT SELL-TO-CLOSE at ${fmt$(targetExit)} (take-profit, +${Math.round(TAKE_PROFIT_GAIN * 100)}%).`,
+    `5. Set a hard stop at ${fmt$(stopPrice)} (−${Math.round(STOP_LOSS_DROP * 100)}% of premium); close the moment it's hit.`,
+    `6. If neither hits, CLOSE at the market around the session midpoint — do NOT let a 0DTE bleed to expiry.`,
   ];
 
   return {

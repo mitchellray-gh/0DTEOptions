@@ -92,6 +92,7 @@ def settle_trade(
     minutes_to_expiry: int,
     commission_per_contract: float = 0.65,
     exit_slippage_pct: float = 0.0,
+    time_exit_frac: float = 1.0,
 ) -> BacktestTrade:
     """Resolve a single long-option trade against an intraday underlying path.
 
@@ -124,6 +125,11 @@ def settle_trade(
     exit_underlying = float(path[-1])
     exit_frac = 1.0           # fraction of the session elapsed at exit
 
+    # Optional mid-session time-exit: close any survivor at its model mark once
+    # this fraction of the session has elapsed, rather than letting a 0DTE bleed
+    # to a worthless expiry. 1.0 disables it (hold to expiry).
+    time_exit_k = int(round(time_exit_frac * n)) if 0.0 < time_exit_frac < 1.0 else None
+
     # Walk the intraday checkpoints (indices 1..n-1, all with T > 0). The final
     # point (index n) is expiry and always settles at intrinsic value below.
     for k in range(1, n):
@@ -147,6 +153,14 @@ def settle_trade(
             exit_underlying = S_k
             exit_frac = frac
             break
+        if time_exit_k is not None and k >= time_exit_k:
+            # Close at the current model mark (a real order fill, so it takes
+            # the slippage haircut below like TP/SL).
+            exit_price, exit_reason = mark, "time_exit"
+            hold_minutes = max(int(minutes_to_expiry * frac), 1)
+            exit_underlying = S_k
+            exit_frac = frac
+            break
 
     if exit_price is None:
         # Survived to the close -> intrinsic settlement.
@@ -159,7 +173,7 @@ def settle_trade(
 
     # Take-profit / stop fills give up a touch to slippage; expiry settles clean.
     realized_exit = exit_price
-    if exit_reason in ("take_profit", "stop_loss"):
+    if exit_reason in ("take_profit", "stop_loss", "time_exit"):
         realized_exit = exit_price * (1.0 - exit_slippage_pct)
 
     mult = 100.0 * contracts
