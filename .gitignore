@@ -33,6 +33,10 @@ htmlcov/
 *.log
 *.log.*
 
+# ── Forward-test snapshots (personal recorded data) ───────────────────────────
+forward/
+snapshots/
+
 # ── OS / editor noise ─────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
