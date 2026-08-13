@@ -1,0 +1,7 @@
+# Local development only — NOT installed in the Vercel serverless bundle.
+# Vercel provides its own ASGI server, so uvicorn (and its heavy [standard]
+# extras: uvloop, httptools, watchfiles) are excluded from requirements.txt to
+# keep the function under Vercel's size limit. Install these for local runs:
+#   pip install -r requirements-dev.txt
+-r requirements.txt
+uvicorn[standard]>=0.27.0

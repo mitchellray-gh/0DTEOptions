@@ -79,9 +79,14 @@ The backend is a **thin data proxy**. All the math lives in the React app.
 ### 1. Backend (data proxy)
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements-dev.txt   # runtime deps + uvicorn for local serving
 uvicorn backend.main:app --reload --port 8000
 ```
+
+> `requirements.txt` holds only the **runtime** deps used by the Vercel
+> serverless function. `uvicorn[standard]` lives in `requirements-dev.txt`
+> because Vercel supplies its own ASGI server — keeping it out of the bundle
+> avoids Vercel's function size limit.
 
 The API exposes:
 
