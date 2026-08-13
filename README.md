@@ -4,11 +4,42 @@
 
 Liquid US-listed underlyings (SPY, QQQ, IWM, DIA, …) now have option contracts that expire **today**. Their premiums move violently against time decay (theta) and tiny shifts in implied volatility, which means the bid/ask is occasionally mispriced relative to the rest of the chain. This tool finds those mispricings and tells you exactly what to do about them.
 
-> ⚠️ **Educational use only.** 0DTE options can lose 100% of premium in minutes. Always verify quotes in your broker before trading.
+> ⚠️ **Educational use only.** 0DTE options can lose 100% of premium in minutes. Always verify quotes in your broker before trading. This app never connects to a brokerage and never routes real orders.
 
 ---
 
-## How it works
+## Robinhood-style trainer UI
+
+The React front-end is a **Robinhood-lookalike training app** (dark theme,
+mobile-width layout, price charts, bottom tab bar) with five tabs:
+
+- **Invest** — watchlist with live sparklines & auto-refreshing quotes; tap a
+  symbol for its price chart (1D–1Y) and ranked 0DTE opportunities with plain-
+  English **coaching** on every pick (what/why, Greeks, target, risk, exit).
+- **Practice** — a **virtual paper-trading** portfolio ($10k of pretend cash,
+  positions marked to live/synthetic prices, realized/unrealized P&L, trade
+  log) **and** a **historical replay** player: pick a recent date, press play,
+  and practice trading that day's real price action minute-by-minute.
+- **Learn** — guided **lessons** (0DTE basics, calls vs puts, the Greeks, IV &
+  edge, position sizing, exit discipline) each with a scored **quiz** and saved
+  progress.
+- **Discover** — a **news feed** (yfinance headlines) plus an **analytics**
+  snapshot (movers, gainers/losers, watchlist bias).
+- **Profile** — trade settings (account size, risk %, min edge, type filter),
+  paper-account stats, and the risk disclaimer.
+
+Live quotes poll every ~12s (paused when the tab is hidden). Everything is
+paper-only; user state (watchlist, settings, paper portfolio, lesson progress)
+lives in `localStorage`.
+
+> **Replay honesty:** real historical *option* quotes aren't freely available,
+> so replay uses **real underlying prices** with **synthetic** option chains
+> (Black-Scholes value at a base IV + a smile + noise) so the scanner has
+> realistic mispricings to flag. It's for practice only.
+
+---
+
+## How the scanner works
 
 1. **Fetch** — for each ticker, the Python backend pulls the 0DTE option chain (or the nearest expiry within 3 days) from Yahoo Finance via [`yfinance`](https://github.com/ranaroussi/yfinance). This is the **only** thing the backend does — a browser can't call Yahoo directly because of CORS.
 2. **Anchor** — *(in the browser)* compute a chain-wide **reference IV** as the volume-weighted IV of liquid, near-the-money contracts. This is the market's own consensus for *today*'s realized vol.
@@ -56,6 +87,10 @@ The API exposes:
 
 - `GET /api/health`
 - `GET /api/chain?tickers=SPY,QQQ` — **raw** option chains (all the web app needs; it scores them client-side). Cached ~20s; append `&nocache=true` to bypass.
+- `GET /api/quote?tickers=SPY,QQQ` — lightweight last-price snapshot for auto-refreshing quotes/sparklines. Cached ~8s.
+- `GET /api/history?ticker=SPY&range=1d` — OHLC bars for the price chart (`range` ∈ `1d,5d,1mo,3mo,6mo,1y,ytd`). Cached ~30s.
+- `GET /api/news?tickers=SPY,QQQ&limit=20` — recent news headlines for the Discover feed. Cached ~120s.
+- `GET /api/replay/day?ticker=SPY&date=YYYY-MM-DD` — intraday bars for one past date (last ~30 days) driving the replay practice mode.
 - `POST /api/backtest` — see [Backtesting](#backtesting).
 
 ### 2. Frontend

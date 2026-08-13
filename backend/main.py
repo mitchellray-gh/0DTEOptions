@@ -13,7 +13,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from .backtest import BacktestConfig, run_backtest
-from .scanner import DEFAULT_RISK_FREE_RATE, fetch_chains
+from .scanner import (
+    DEFAULT_RISK_FREE_RATE,
+    fetch_chains,
+    fetch_history,
+    fetch_intraday_for_date,
+    fetch_news,
+    fetch_quotes,
+)
 from .sp500 import fetch_sp500_tickers
 
 logging.basicConfig(
@@ -93,6 +100,147 @@ def sp500_tickers() -> dict:
     """Return the current S&P 500 ticker list."""
     tickers = fetch_sp500_tickers()
     return {"count": len(tickers), "tickers": tickers}
+
+
+def _parse_tickers(tickers: Optional[str], max_n: int) -> list[str]:
+    parsed = [t.strip().upper() for t in tickers.split(",") if t.strip()] if tickers else []
+    if not parsed:
+        raise HTTPException(400, "Provide at least one ticker, e.g. ?tickers=SPY,QQQ")
+    if len(parsed) > max_n:
+        raise HTTPException(400, f"Too many tickers — limit to {max_n}.")
+    # de-dup, preserve order
+    seen: set[str] = set()
+    out: list[str] = []
+    for t in parsed:
+        if t not in seen:
+            seen.add(t)
+            out.append(t)
+    return out
+
+
+# Short caches for the polling endpoints so rapid front-end refreshes don't
+# hammer Yahoo. Quotes move fast (short TTL); news changes slowly (longer TTL).
+_quote_cache: dict[str, tuple[float, dict]] = {}
+_QUOTE_CACHE_TTL_SECONDS = 8.0
+_news_cache: dict[str, tuple[float, dict]] = {}
+_NEWS_CACHE_TTL_SECONDS = 120.0
+_history_cache: dict[str, tuple[float, dict]] = {}
+_HISTORY_CACHE_TTL_SECONDS = 30.0
+
+
+@app.get("/api/quote")
+async def quote(
+    tickers: Optional[str] = Query(None, description="Comma-separated tickers. Max 30."),
+    nocache: bool = Query(False),
+) -> dict:
+    """Lightweight last-price snapshot for auto-refreshing the UI."""
+    parsed = _parse_tickers(tickers, 30)
+    key = ",".join(parsed)
+    now = time.time()
+    cached = _quote_cache.get(key)
+    if cached and not nocache and (now - cached[0]) < _QUOTE_CACHE_TTL_SECONDS:
+        return cached[1]
+    try:
+        loop = asyncio.get_event_loop()
+        quotes, notes = await loop.run_in_executor(None, lambda: fetch_quotes(parsed))
+    except Exception as exc:  # noqa: BLE001
+        log.exception("Quote fetch failed")
+        raise HTTPException(500, f"Quote fetch failed: {exc}") from exc
+    response = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "quotes": quotes,
+        "notes": notes,
+    }
+    _quote_cache[key] = (time.time(), response)
+    return response
+
+
+@app.get("/api/history")
+async def history(
+    ticker: str = Query(..., description="Single ticker, e.g. SPY"),
+    range: str = Query("1d", description="1d, 5d, 1mo, 3mo, 6mo, 1y, ytd"),
+) -> dict:
+    """OHLC bars for the instrument price chart."""
+    sym = ticker.strip().upper()
+    if not sym:
+        raise HTTPException(400, "Provide a ticker, e.g. ?ticker=SPY")
+    key = f"{sym}:{range}"
+    now = time.time()
+    cached = _history_cache.get(key)
+    if cached and (now - cached[0]) < _HISTORY_CACHE_TTL_SECONDS:
+        return cached[1]
+    try:
+        loop = asyncio.get_event_loop()
+        data = await loop.run_in_executor(None, lambda: fetch_history(sym, range))
+    except Exception as exc:  # noqa: BLE001
+        log.exception("History fetch failed")
+        raise HTTPException(500, f"History fetch failed: {exc}") from exc
+    data["generated_at"] = datetime.now(timezone.utc).isoformat()
+    _history_cache[key] = (time.time(), data)
+    return data
+
+
+@app.get("/api/news")
+async def news(
+    tickers: Optional[str] = Query(None, description="Comma-separated tickers. Max 15."),
+    limit: int = Query(20, ge=1, le=50),
+    nocache: bool = Query(False),
+) -> dict:
+    """Recent news headlines for the Discover feed."""
+    parsed = _parse_tickers(tickers, 15)
+    key = f"{','.join(parsed)}:{limit}"
+    now = time.time()
+    cached = _news_cache.get(key)
+    if cached and not nocache and (now - cached[0]) < _NEWS_CACHE_TTL_SECONDS:
+        return cached[1]
+    try:
+        loop = asyncio.get_event_loop()
+        items, notes = await loop.run_in_executor(None, lambda: fetch_news(parsed, limit))
+    except Exception as exc:  # noqa: BLE001
+        log.exception("News fetch failed")
+        raise HTTPException(500, f"News fetch failed: {exc}") from exc
+    response = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "items": items,
+        "notes": notes,
+    }
+    _news_cache[key] = (time.time(), response)
+    return response
+
+
+@app.get("/api/replay/day")
+async def replay_day(
+    ticker: str = Query(..., description="Single ticker, e.g. SPY"),
+    date: str = Query(..., description="Past date YYYY-MM-DD (last ~30 days)"),
+) -> dict:
+    """Intraday bars for a single past date, driving the replay practice mode.
+
+    The front-end steps a simulated clock through these underlying bars and
+    generates SYNTHETIC 0DTE option chains around each price (real historical
+    option quotes aren't freely available) so the user can practice trades.
+    """
+    sym = ticker.strip().upper()
+    try:
+        datetime.strptime(date, "%Y-%m-%d")
+    except ValueError as exc:
+        raise HTTPException(400, "date must be YYYY-MM-DD") from exc
+    try:
+        loop = asyncio.get_event_loop()
+        data = await loop.run_in_executor(None, lambda: fetch_intraday_for_date(sym, date))
+    except Exception as exc:  # noqa: BLE001
+        log.exception("Replay fetch failed")
+        raise HTTPException(500, f"Replay fetch failed: {exc}") from exc
+    if not data.get("bars"):
+        data["notes"] = [
+            "No intraday bars for that date — Yahoo only serves intraday history "
+            "for roughly the last 30 days, and markets are closed on "
+            "weekends/holidays. Pick a recent weekday."
+        ]
+    data["disclaimer"] = (
+        "Replay uses real underlying prices but SYNTHETIC option chains "
+        "(historical option quotes aren't free). Practice only."
+    )
+    return data
 
 
 class BacktestRequest(BaseModel):

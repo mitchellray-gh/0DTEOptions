@@ -25,7 +25,7 @@ import threading
 import time as _time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Iterable
 
 import numpy as np
@@ -602,4 +602,238 @@ def fetch_chains(tickers: list[str] | None = None,
                 notes.append(f"{ticker}: fetch error — {exc}")
 
     return chains, notes
+
+
+# ── Live quotes / history / news (for the Robinhood-style trainer UI) ─────────
+# These are additional thin proxies used by the front-end for the price
+# sparklines, the instrument chart, auto-refreshing marks and the news feed.
+# yfinance is the only data source; everything is educational / delayed.
+
+def fetch_quotes(tickers: list[str]) -> tuple[dict[str, dict], list[str]]:
+    """Return a lightweight last-price snapshot for each ticker.
+
+    ``{ "SPY": {"price": 452.1, "prev_close": 450.0, "change": 2.1,
+                "change_pct": 0.0047, "currency": "USD"} }``
+
+    Uses ``fast_info`` (one HTTP call per ticker) and falls back to a 1-day
+    history bar if fast_info is missing. Failures are collected as notes and
+    simply omitted from the result — the caller renders what it gets.
+    """
+    out: dict[str, dict] = {}
+    notes: list[str] = []
+
+    def _one(ticker: str):
+        try:
+            t = yf.Ticker(ticker)
+            fi = t.fast_info
+            price = None
+            prev = None
+            try:
+                price = float(fi["last_price"])
+            except Exception:
+                pass
+            try:
+                prev = float(fi["previous_close"])
+            except Exception:
+                pass
+            if price is None or price <= 0:
+                hist = t.history(period="2d", interval="1d")
+                closes = hist["Close"].dropna()
+                if not closes.empty:
+                    price = float(closes.iloc[-1])
+                    if len(closes) >= 2:
+                        prev = float(closes.iloc[-2])
+            if price is None or price <= 0:
+                return ticker, None, f"{ticker}: no quote available"
+            if prev is None or prev <= 0:
+                prev = price
+            change = price - prev
+            change_pct = change / prev if prev else 0.0
+            return ticker, {
+                "price": round(price, 4),
+                "prev_close": round(prev, 4),
+                "change": round(change, 4),
+                "change_pct": round(change_pct, 6),
+            }, None
+        except Exception as exc:  # noqa: BLE001
+            if _is_rate_limit_error(exc):
+                return ticker, None, f"{ticker}: rate-limited"
+            return ticker, None, f"{ticker}: quote error — {exc}"
+
+    workers = min(_MAX_WORKERS, max(len(tickers), 1))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(_one, t): t for t in tickers}
+        for fut in as_completed(futures):
+            ticker, quote, note = fut.result()
+            if quote is not None:
+                out[ticker] = quote
+            if note:
+                notes.append(note)
+    return out, notes
+
+
+# yfinance-accepted (period, interval) pairs the UI exposes as ranges.
+_HISTORY_RANGES: dict[str, tuple[str, str]] = {
+    "1d": ("1d", "5m"),
+    "5d": ("5d", "15m"),
+    "1mo": ("1mo", "1d"),
+    "3mo": ("3mo", "1d"),
+    "6mo": ("6mo", "1d"),
+    "1y": ("1y", "1d"),
+    "ytd": ("ytd", "1d"),
+}
+
+
+def fetch_history(ticker: str, range_key: str = "1d") -> dict:
+    """Return OHLC bars for a ticker over the requested range.
+
+    ``{ underlying, range, interval, bars: [{t, o, h, l, c, v}] }`` where ``t``
+    is an ISO-8601 UTC timestamp. Used for the instrument price chart and the
+    historical-replay clock.
+    """
+    period, interval = _HISTORY_RANGES.get(range_key, _HISTORY_RANGES["1d"])
+    t = yf.Ticker(ticker)
+    hist = t.history(period=period, interval=interval)
+    bars: list[dict] = []
+    if hist is not None and not hist.empty:
+        for idx, r in hist.iterrows():
+            try:
+                ts = idx.tz_convert("UTC") if idx.tzinfo else idx
+                iso = ts.isoformat()
+            except Exception:
+                iso = str(idx)
+            close = r.get("Close")
+            if close is None or pd.isna(close):
+                continue
+            bars.append({
+                "t": iso,
+                "o": _row_float(r.get("Open")),
+                "h": _row_float(r.get("High")),
+                "l": _row_float(r.get("Low")),
+                "c": _row_float(close),
+                "v": _row_int(r.get("Volume")),
+            })
+    return {
+        "underlying": ticker.upper(),
+        "range": range_key,
+        "interval": interval,
+        "bars": bars,
+    }
+
+
+def fetch_intraday_for_date(ticker: str, date_iso: str) -> dict:
+    """Return 1-minute (fallback 5-minute) bars for a single past date.
+
+    Yahoo only serves intraday history for roughly the last 30-60 days, so this
+    powers the "replay a recent day" practice mode. ``date_iso`` is YYYY-MM-DD.
+    """
+    start = datetime.strptime(date_iso, "%Y-%m-%d").date()
+    end = start + timedelta(days=1)
+    t = yf.Ticker(ticker)
+    interval = "1m"
+    hist = t.history(start=start.isoformat(), end=end.isoformat(), interval=interval)
+    if hist is None or hist.empty:
+        interval = "5m"
+        hist = t.history(start=start.isoformat(), end=end.isoformat(), interval=interval)
+    bars: list[dict] = []
+    if hist is not None and not hist.empty:
+        for idx, r in hist.iterrows():
+            close = r.get("Close")
+            if close is None or pd.isna(close):
+                continue
+            try:
+                ts = idx.tz_convert("UTC") if idx.tzinfo else idx
+                iso = ts.isoformat()
+            except Exception:
+                iso = str(idx)
+            bars.append({
+                "t": iso,
+                "o": _row_float(r.get("Open")),
+                "h": _row_float(r.get("High")),
+                "l": _row_float(r.get("Low")),
+                "c": _row_float(close),
+                "v": _row_int(r.get("Volume")),
+            })
+    return {
+        "underlying": ticker.upper(),
+        "date": date_iso,
+        "interval": interval,
+        "bars": bars,
+    }
+
+
+def fetch_news(tickers: list[str], limit: int = 20) -> tuple[list[dict], list[str]]:
+    """Aggregate recent news headlines for the given tickers via yfinance.
+
+    Returns ``(items, notes)``. Each item::
+
+        {uuid, title, publisher, link, published_at, thumbnail, tickers[]}
+
+    yfinance's ``.news`` schema has drifted over versions, so this normalizes
+    both the legacy flat shape and the newer ``{content: {...}}`` shape.
+    """
+    items: list[dict] = []
+    notes: list[str] = []
+    seen: set[str] = set()
+
+    for ticker in tickers:
+        try:
+            raw = yf.Ticker(ticker).news or []
+        except Exception as exc:  # noqa: BLE001
+            notes.append(f"{ticker}: news error — {exc}")
+            continue
+        for entry in raw:
+            content = entry.get("content", entry) if isinstance(entry, dict) else {}
+            title = content.get("title") or entry.get("title")
+            if not title:
+                continue
+            # Link
+            link = (entry.get("link")
+                    or (content.get("canonicalUrl") or {}).get("url")
+                    or (content.get("clickThroughUrl") or {}).get("url"))
+            # Publisher
+            publisher = (entry.get("publisher")
+                         or (content.get("provider") or {}).get("displayName")
+                         or "")
+            # Published time
+            published = (content.get("pubDate")
+                         or content.get("displayTime"))
+            if published is None and entry.get("providerPublishTime"):
+                try:
+                    published = datetime.fromtimestamp(
+                        int(entry["providerPublishTime"]), tz=timezone.utc
+                    ).isoformat()
+                except Exception:
+                    published = None
+            # Thumbnail
+            thumb = None
+            tn = entry.get("thumbnail") or content.get("thumbnail")
+            if isinstance(tn, dict):
+                res = tn.get("resolutions") or []
+                if res:
+                    thumb = res[0].get("url")
+                thumb = thumb or tn.get("originalUrl")
+            uid = entry.get("uuid") or content.get("id") or link or title
+            if uid in seen:
+                # Same story surfaced by two tickers — tag both.
+                for it in items:
+                    if it["uuid"] == uid and ticker not in it["tickers"]:
+                        it["tickers"].append(ticker)
+                continue
+            seen.add(uid)
+            items.append({
+                "uuid": str(uid),
+                "title": title,
+                "publisher": publisher,
+                "link": link,
+                "published_at": published,
+                "thumbnail": thumb,
+                "tickers": [ticker],
+            })
+
+    # Newest first when we have parseable timestamps.
+    def _key(it):
+        return it.get("published_at") or ""
+    items.sort(key=_key, reverse=True)
+    return items[:limit], notes
 
