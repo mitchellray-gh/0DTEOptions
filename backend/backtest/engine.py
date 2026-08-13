@@ -79,6 +79,10 @@ def run_backtest(cfg: BacktestConfig) -> BacktestResult:
                     opps.append(res)
         opps.sort(key=lambda o: o.score, reverse=True)
         chosen = opps[:cfg.max_trades_per_day]
+        # Optionally act on only a fraction of the suggestions (e.g. 0.8 => take
+        # ~80% of them), deciding per-trade with the run's RNG.
+        if cfg.take_fraction < 1.0:
+            chosen = [o for o in chosen if rng.random() < cfg.take_fraction]
 
         day_pnl = 0.0
         for opp in chosen:

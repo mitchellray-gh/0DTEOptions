@@ -60,6 +60,11 @@ class BacktestConfig:
     commission_per_contract: float = 0.65   # charged on entry and exit
     exit_slippage_pct: float = 0.01         # haircut on take-profit / stop fills
 
+    # Fraction of the day's suggested trades to actually take (0-1). 1.0 takes
+    # every top-N suggestion; e.g. 0.8 randomly acts on ~80% of them, modeling a
+    # trader who skips some signals.
+    take_fraction: float = 1.0
+
     def to_dict(self) -> dict:
         d = asdict(self)
         d["tickers"] = list(self.tickers)
