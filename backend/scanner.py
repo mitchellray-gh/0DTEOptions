@@ -32,6 +32,7 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
+from . import yahoo
 from .models import Opportunity, RejectedContract, TradePlan
 from .pricing import bs_greeks, bs_price, implied_vol
 from .sp500 import fetch_sp500_tickers
@@ -537,6 +538,75 @@ def _serialize_chain_rows(df: pd.DataFrame) -> list[dict]:
     return rows
 
 
+def _yahoo_option_row(o: dict) -> dict:
+    """Coerce a raw Yahoo option JSON object to our chain-row schema."""
+    return {
+        "contractSymbol": str(o.get("contractSymbol", "")),
+        "strike": _row_float(o.get("strike")),
+        "bid": _row_float(o.get("bid")),
+        "ask": _row_float(o.get("ask")),
+        "lastPrice": _row_float(o.get("lastPrice")),
+        "volume": _row_int(o.get("volume")),
+        "openInterest": _row_int(o.get("openInterest")),
+        "impliedVolatility": _row_float(o.get("impliedVolatility")),
+    }
+
+
+def _fetch_chain_yahoo(ticker: str, now: datetime) -> tuple[dict | None, str]:
+    """Fetch one 0DTE/near-dated chain via the direct Yahoo JSON client.
+
+    Returns ``(chain_dict_or_None, note)``. Picks the nearest expiry that is
+    today or within 3 days, re-requesting that specific expiry if Yahoo's
+    default response was for a different date.
+    """
+    try:
+        data = yahoo.options(ticker)
+    except Exception as exc:  # noqa: BLE001
+        return None, f"{ticker}: chain fetch error — {exc}"
+
+    exp_epochs = data.get("expirationDates") or []
+    epoch_by_iso: dict[str, int] = {}
+    for e in exp_epochs:
+        try:
+            iso = datetime.fromtimestamp(int(e), tz=timezone.utc).strftime("%Y-%m-%d")
+            epoch_by_iso.setdefault(iso, int(e))
+        except (TypeError, ValueError, OSError):
+            continue
+
+    expiry = _pick_expiry(epoch_by_iso.keys(), now)
+    if expiry is None:
+        return None, f"{ticker}: no 0DTE/near-dated expiry"
+
+    spot = _row_float((data.get("quote") or {}).get("regularMarketPrice"))
+    opts0 = (data.get("options") or [{}])[0]
+    if int(opts0.get("expirationDate") or 0) != epoch_by_iso[expiry]:
+        try:
+            data = yahoo.options(ticker, epoch_by_iso[expiry])
+        except Exception as exc:  # noqa: BLE001
+            return None, f"{ticker}: chain fetch error — {exc}"
+        opts0 = (data.get("options") or [{}])[0]
+        spot = _row_float((data.get("quote") or {}).get("regularMarketPrice")) or spot
+
+    calls = [_yahoo_option_row(o) for o in (opts0.get("calls") or [])]
+    puts = [_yahoo_option_row(o) for o in (opts0.get("puts") or [])]
+    if not calls and not puts:
+        return None, f"{ticker}: empty chain for {expiry}"
+    if spot <= 0:
+        return None, f"{ticker}: no spot price"
+
+    minutes = _minutes_to_us_market_close(expiry, now)
+    chain = {
+        "underlying": ticker,
+        "spot": round(spot, 4),
+        "expiration": expiry,
+        "minutes_to_expiry": minutes,
+        "calls": calls,
+        "puts": puts,
+    }
+    note = f"{ticker}: spot=${spot:.2f}, expiry={expiry}, mins_left={minutes}"
+    return chain, note
+
+
 def fetch_chains(tickers: list[str] | None = None,
                  risk_free: float = DEFAULT_RISK_FREE_RATE,
                  ) -> tuple[list[dict], list[str]]:
@@ -571,21 +641,7 @@ def fetch_chains(tickers: list[str] | None = None,
     notes: list[str] = []
 
     def _fetch_one(ticker: str):
-        ctx_tuple = _build_chain_context_with_retry(ticker, risk_free, now)
-        if ctx_tuple is None:
-            return None, f"{ticker}: no usable 0DTE/near-dated chain"
-        ctx, calls, puts = ctx_tuple
-        chain = {
-            "underlying": ctx.underlying,
-            "spot": round(ctx.spot, 4),
-            "expiration": ctx.expiry_iso,
-            "minutes_to_expiry": ctx.minutes_to_expiry,
-            "calls": _serialize_chain_rows(calls),
-            "puts": _serialize_chain_rows(puts),
-        }
-        note = (f"{ctx.underlying}: spot=${ctx.spot:.2f}, expiry={ctx.expiry_iso}, "
-                f"mins_left={ctx.minutes_to_expiry}")
-        return chain, note
+        return _fetch_chain_yahoo(ticker, now)
 
     workers = min(_MAX_WORKERS, max(len(unique_tickers), 1))
     with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -624,28 +680,12 @@ def fetch_quotes(tickers: list[str]) -> tuple[dict[str, dict], list[str]]:
 
     def _one(ticker: str):
         try:
-            t = yf.Ticker(ticker)
-            fi = t.fast_info
-            price = None
-            prev = None
-            try:
-                price = float(fi["last_price"])
-            except Exception:
-                pass
-            try:
-                prev = float(fi["previous_close"])
-            except Exception:
-                pass
-            if price is None or price <= 0:
-                hist = t.history(period="2d", interval="1d")
-                closes = hist["Close"].dropna()
-                if not closes.empty:
-                    price = float(closes.iloc[-1])
-                    if len(closes) >= 2:
-                        prev = float(closes.iloc[-2])
-            if price is None or price <= 0:
+            meta = yahoo.chart(ticker, "1d", "5m").get("meta") or {}
+            price = _row_float(meta.get("regularMarketPrice"))
+            prev = _row_float(meta.get("chartPreviousClose") or meta.get("previousClose"))
+            if price <= 0:
                 return ticker, None, f"{ticker}: no quote available"
-            if prev is None or prev <= 0:
+            if prev <= 0:
                 prev = price
             change = price - prev
             change_pct = change / prev if prev else 0.0
@@ -656,8 +696,6 @@ def fetch_quotes(tickers: list[str]) -> tuple[dict[str, dict], list[str]]:
                 "change_pct": round(change_pct, 6),
             }, None
         except Exception as exc:  # noqa: BLE001
-            if _is_rate_limit_error(exc):
-                return ticker, None, f"{ticker}: rate-limited"
             return ticker, None, f"{ticker}: quote error — {exc}"
 
     workers = min(_MAX_WORKERS, max(len(tickers), 1))
@@ -672,7 +710,7 @@ def fetch_quotes(tickers: list[str]) -> tuple[dict[str, dict], list[str]]:
     return out, notes
 
 
-# yfinance-accepted (period, interval) pairs the UI exposes as ranges.
+# UI range -> Yahoo chart (range, interval) pairs.
 _HISTORY_RANGES: dict[str, tuple[str, str]] = {
     "1d": ("1d", "5m"),
     "5d": ("5d", "15m"),
@@ -691,28 +729,12 @@ def fetch_history(ticker: str, range_key: str = "1d") -> dict:
     is an ISO-8601 UTC timestamp. Used for the instrument price chart and the
     historical-replay clock.
     """
-    period, interval = _HISTORY_RANGES.get(range_key, _HISTORY_RANGES["1d"])
-    t = yf.Ticker(ticker)
-    hist = t.history(period=period, interval=interval)
+    rng, interval = _HISTORY_RANGES.get(range_key, _HISTORY_RANGES["1d"])
     bars: list[dict] = []
-    if hist is not None and not hist.empty:
-        for idx, r in hist.iterrows():
-            try:
-                ts = idx.tz_convert("UTC") if idx.tzinfo else idx
-                iso = ts.isoformat()
-            except Exception:
-                iso = str(idx)
-            close = r.get("Close")
-            if close is None or pd.isna(close):
-                continue
-            bars.append({
-                "t": iso,
-                "o": _row_float(r.get("Open")),
-                "h": _row_float(r.get("High")),
-                "l": _row_float(r.get("Low")),
-                "c": _row_float(close),
-                "v": _row_int(r.get("Volume")),
-            })
+    try:
+        bars = yahoo.bars_from_chart(yahoo.chart(ticker.upper(), rng, interval))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("history fetch failed for %s: %s", ticker, exc)
     return {
         "underlying": ticker.upper(),
         "range": range_key,
@@ -727,33 +749,21 @@ def fetch_intraday_for_date(ticker: str, date_iso: str) -> dict:
     Yahoo only serves intraday history for roughly the last 30-60 days, so this
     powers the "replay a recent day" practice mode. ``date_iso`` is YYYY-MM-DD.
     """
-    start = datetime.strptime(date_iso, "%Y-%m-%d").date()
+    start = datetime.strptime(date_iso, "%Y-%m-%d").replace(tzinfo=timezone.utc)
     end = start + timedelta(days=1)
-    t = yf.Ticker(ticker)
+    p1, p2 = int(start.timestamp()), int(end.timestamp())
     interval = "1m"
-    hist = t.history(start=start.isoformat(), end=end.isoformat(), interval=interval)
-    if hist is None or hist.empty:
-        interval = "5m"
-        hist = t.history(start=start.isoformat(), end=end.isoformat(), interval=interval)
     bars: list[dict] = []
-    if hist is not None and not hist.empty:
-        for idx, r in hist.iterrows():
-            close = r.get("Close")
-            if close is None or pd.isna(close):
-                continue
-            try:
-                ts = idx.tz_convert("UTC") if idx.tzinfo else idx
-                iso = ts.isoformat()
-            except Exception:
-                iso = str(idx)
-            bars.append({
-                "t": iso,
-                "o": _row_float(r.get("Open")),
-                "h": _row_float(r.get("High")),
-                "l": _row_float(r.get("Low")),
-                "c": _row_float(close),
-                "v": _row_int(r.get("Volume")),
-            })
+    try:
+        bars = yahoo.bars_from_chart(yahoo.chart_period(ticker.upper(), p1, p2, interval))
+    except Exception as exc:  # noqa: BLE001
+        log.info("1m intraday failed for %s %s: %s", ticker, date_iso, exc)
+    if not bars:
+        interval = "5m"
+        try:
+            bars = yahoo.bars_from_chart(yahoo.chart_period(ticker.upper(), p1, p2, interval))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("5m intraday failed for %s %s: %s", ticker, date_iso, exc)
     return {
         "underlying": ticker.upper(),
         "date": date_iso,
@@ -763,14 +773,11 @@ def fetch_intraday_for_date(ticker: str, date_iso: str) -> dict:
 
 
 def fetch_news(tickers: list[str], limit: int = 20) -> tuple[list[dict], list[str]]:
-    """Aggregate recent news headlines for the given tickers via yfinance.
+    """Aggregate recent news headlines for the given tickers via Yahoo search.
 
     Returns ``(items, notes)``. Each item::
 
         {uuid, title, publisher, link, published_at, thumbnail, tickers[]}
-
-    yfinance's ``.news`` schema has drifted over versions, so this normalizes
-    both the legacy flat shape and the newer ``{content: {...}}`` shape.
     """
     items: list[dict] = []
     notes: list[str] = []
@@ -778,7 +785,7 @@ def fetch_news(tickers: list[str], limit: int = 20) -> tuple[list[dict], list[st
 
     for ticker in tickers:
         try:
-            raw = yf.Ticker(ticker).news or []
+            raw = yahoo.search_news(ticker, count=max(limit, 10))
         except Exception as exc:  # noqa: BLE001
             notes.append(f"{ticker}: news error — {exc}")
             continue

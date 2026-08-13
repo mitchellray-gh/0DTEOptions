@@ -11,7 +11,7 @@ import ProfilePage from './pages/ProfilePage.jsx';
 
 const LS_WATCHLIST = 'zdte.watchlist';
 const LS_SETTINGS = 'zdte.settings';
-const DEFAULT_WATCHLIST = ['SPY', 'QQQ', 'IWM'];
+const DEFAULT_WATCHLIST = ['SPY', 'QQQ', 'IWM', 'DIA', 'NVDA'];
 const DEFAULT_SETTINGS = { accountSize: 5000, riskPct: 2, minEdge: 5, type: 'all', maxResults: 50 };
 
 function loadJSON(key, fallback) {

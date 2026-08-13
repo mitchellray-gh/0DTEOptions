@@ -88,6 +88,16 @@ uvicorn backend.main:app --reload --port 8000
 > because Vercel supplies its own ASGI server — keeping it out of the bundle
 > avoids Vercel's function size limit.
 
+> **Live data / Yahoo access.** The backend talks to Yahoo's public JSON
+> endpoints directly with a browser User-Agent + cookie/crumb handshake
+> (`backend/yahoo.py`), which is far more reliable from datacenters than
+> yfinance's default path. On a **corporate network that MITM-inspects TLS**,
+> point `requests` at your trusted-root PEM so it can validate the chain:
+> ```pwsh
+> $env:REQUESTS_CA_BUNDLE = "$env:LOCALAPPDATA\PortableNode\corp-ca-bundle.pem"
+> ```
+> Vercel doesn't need this.
+
 The API exposes:
 
 - `GET /api/health`
