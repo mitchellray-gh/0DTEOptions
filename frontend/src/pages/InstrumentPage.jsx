@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useOutletContext, useParams } from 'react-router-dom';
 import PriceChart from '../components/PriceChart.jsx';
+import NewsFeed from '../components/NewsFeed.jsx';
 import { fetchChains, fetchHistory } from '../api.js';
 import { scanChains } from '../lib/scanner.js';
 import { buyToOpen, loadPaper } from '../lib/paper.js';
@@ -161,6 +162,14 @@ export default function InstrumentPage() {
           {toast?.err && <div className="input-error">{toast.err}</div>}
         </div>
       )}
+
+      <h3>Headlines</h3>
+      <NewsFeed
+        tickers={[sym]}
+        limit={12}
+        showTickers={false}
+        emptyText={`No recent headlines for ${sym}.`}
+      />
     </div>
   );
 }
