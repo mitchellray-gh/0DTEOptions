@@ -100,7 +100,7 @@ def run(cfg: BacktestConfig, *, min_pop: float, max_width: float,
     return trades
 
 
-def summarize(trades):
+def summarize(trades, starting_equity=1000.0):
     n = len(trades)
     if not n:
         return {"trades": 0}
@@ -112,6 +112,27 @@ def summarize(trades):
     reasons = {}
     for t in trades:
         reasons[t.exit_reason] = reasons.get(t.exit_reason, 0) + 1
+
+    # Build equity curve and measure max drawdown.
+    equity = starting_equity
+    peak = equity
+    max_dd = 0.0
+    worst_date = None
+    worst_streak = cur_streak = 0
+    for t in trades:
+        equity += t.pnl_usd
+        if equity > peak:
+            peak = equity
+            cur_streak = 0
+        dd = peak - equity
+        if dd > max_dd:
+            max_dd = dd
+            worst_date = t.date
+        if t.pnl_usd < 0:
+            cur_streak += 1
+            worst_streak = max(worst_streak, cur_streak)
+        else:
+            cur_streak = 0
     return {
         "trades": n,
         "win_rate": len(wins) / n,
@@ -120,6 +141,10 @@ def summarize(trades):
         "profit_factor": (gw / gl) if gl else float("inf"),
         "avg_win": (gw / len(wins)) if wins else 0.0,
         "avg_loss": (gl / len(losses)) if losses else 0.0,
+        "max_drawdown": max_dd,
+        "max_drawdown_pct": max_dd / starting_equity,
+        "worst_drawdown_near": worst_date,
+        "worst_loss_streak": worst_streak,
         "reasons": reasons,
     }
 
@@ -159,9 +184,9 @@ def main(argv=None):
                  profit_target=a.profit_target, stop_multiple=a.stop_multiple,
                  max_per_day=a.max_per_day)
         all_trades += tr
-        per_seed.append((sd, summarize(tr)))
+        per_seed.append((sd, summarize(tr, a.account_size)))
 
-    m = summarize(all_trades)
+    m = summarize(all_trades, a.account_size)
     print("=" * 60)
     print("  CREDIT-SPREAD BACKTEST")
     print("=" * 60)
@@ -172,25 +197,30 @@ def main(argv=None):
     if not m.get("trades"):
         print("  No spreads met the gates.")
         return 0
-    print(f"  Trades taken   : {m['trades']}")
-    print(f"  WIN RATE       : {m['win_rate']*100:.1f}%")
-    print(f"  Net P&L        : ${m['net']:,.2f}")
-    print(f"  Expectancy/trd : ${m['expectancy']:.2f}")
+    print(f"  Trades taken      : {m['trades']}")
+    print(f"  WIN RATE          : {m['win_rate']*100:.1f}%")
+    print(f"  Net P&L           : ${m['net']:,.2f}")
+    print(f"  Expectancy/trade  : ${m['expectancy']:.2f}")
     pf = m["profit_factor"]
-    print(f"  Profit factor  : {'inf' if pf == float('inf') else f'{pf:.2f}'}")
-    print(f"  Avg win / loss : ${m['avg_win']:.2f} / ${m['avg_loss']:.2f}")
-    print(f"  Exit reasons   : {m['reasons']}")
+    print(f"  Profit factor     : {'inf' if pf == float('inf') else f'{pf:.2f}'}")
+    print(f"  Avg win / loss    : ${m['avg_win']:.2f} / ${m['avg_loss']:.2f}")
+    print(f"  Max drawdown      : ${m['max_drawdown']:,.2f}  ({m['max_drawdown_pct']*100:.1f}%  near {m['worst_drawdown_near']})")
+    print(f"  Worst loss streak : {m['worst_loss_streak']} trades in a row")
+    print(f"  Exit reasons      : {m['reasons']}")
     print("-" * 60)
     start = a.account_size
-    final = start + m["net"]
-    print(f"  Starting equity: ${start:,.2f}")
-    print(f"  Final equity   : ${final:,.2f}  ({(final/start-1)*100:+.1f}%)")
+    final = start + m["net"] / len(seeds)   # per-seed average
+    print(f"  Starting equity   : ${start:,.2f}")
+    print(f"  Avg final equity  : ${final:,.2f}  ({(final/start-1)*100:+.1f}%)")
     if len(per_seed) > 1:
         print("-" * 60)
         for sd, s in per_seed:
             if s.get("trades"):
+                end_eq = start + s["net"]
+                dd_pct = s["max_drawdown_pct"] * 100
                 print(f"  seed {sd:<5}: win {s['win_rate']*100:5.1f}%  "
-                      f"net ${s['net']:>9.2f}  ({s['trades']} trades)")
+                      f"net ${s['net']:>9.2f}  maxDD {dd_pct:.1f}%  "
+                      f"streak {s['worst_loss_streak']}  final ${end_eq:,.2f}")
     print("-" * 60)
     print("  SIMULATION — real SPY daily bars, SYNTHETIC 0DTE option chains "
           "(real intraday option quotes aren't free). Not investment advice.")
