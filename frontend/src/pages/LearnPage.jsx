@@ -1,7 +1,9 @@
 import React, { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { LESSONS, loadProgress, saveProgress } from '../lib/curriculum.js';
 
 export default function LearnPage() {
+  const navigate = useNavigate();
   const [progress, setProgress] = useState(() => loadProgress());
   const [openId, setOpenId] = useState(null);
 
@@ -29,6 +31,14 @@ export default function LearnPage() {
         <div className="rh-progressbar"><span style={{ width: `${(completed / LESSONS.length) * 100}%` }} /></div>
         <p className="rh-lead" style={{ marginTop: 8 }}>Complete lessons and pass the checks to build a foundation before you risk real money.</p>
       </div>
+
+      <button className="rh-row" onClick={() => navigate('/methodology')}>
+        <div className="rh-col">
+          <span className="rh-sym">📊 Methodology &amp; Data</span>
+          <span className="rh-name">What the strategy is trained on + our honest audit findings</span>
+        </div>
+        <span className="rh-pill">Open →</span>
+      </button>
 
       {LESSONS.map((lesson) => {
         const p = progress[lesson.id] || {};

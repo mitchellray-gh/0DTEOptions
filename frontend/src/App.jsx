@@ -8,6 +8,7 @@ import InstrumentPage from './pages/InstrumentPage.jsx';
 import SpreadsPage from './pages/SpreadsPage.jsx';
 import PracticePage from './pages/PracticePage.jsx';
 import LearnPage from './pages/LearnPage.jsx';
+import MethodologyPage from './pages/MethodologyPage.jsx';
 import DiscoverPage from './pages/DiscoverPage.jsx';
 import ProfilePage from './pages/ProfilePage.jsx';
 
@@ -31,6 +32,7 @@ const TITLES = {
   '/spreads': ['Spreads', 'High win-rate credit spreads'],
   '/practice': ['Practice', 'Paper trade & replay'],
   '/learn': ['Learn', 'Master 0DTE options'],
+  '/methodology': ['Methodology', 'Data & audit transparency'],
   '/discover': ['Discover', 'News & analytics'],
   '/profile': ['Profile', 'Your account'],
 };
@@ -98,6 +100,7 @@ export default function App() {
         <Route path="/spreads" element={<SpreadsPage />} />
         <Route path="/practice" element={<PracticePage />} />
         <Route path="/learn" element={<LearnPage />} />
+        <Route path="/methodology" element={<MethodologyPage />} />
         <Route path="/discover" element={<DiscoverPage />} />
         <Route path="/profile" element={<ProfilePage />} />
       </Route>
