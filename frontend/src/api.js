@@ -124,3 +124,16 @@ export async function fetchReplayDay(ticker, date) {
   const qs = new URLSearchParams({ ticker: ticker.trim().toUpperCase(), date });
   return getJSON(`/api/replay/day?${qs.toString()}`, { timeoutMs: 40_000 });
 }
+
+/** Top gainers, losers, and most-active US tickers (Alpha Vantage). */
+export async function fetchMarketMovers() {
+  return getJSON('/api/market/movers', { timeoutMs: 20_000 });
+}
+
+/** Upcoming earnings dates, optionally filtered to specific tickers (Alpha Vantage). */
+export async function fetchEarnings(tickers = []) {
+  const qs = tickers.length
+    ? new URLSearchParams({ tickers: tickers.map((t) => t.toUpperCase()).join(',') })
+    : null;
+  return getJSON(`/api/market/earnings${qs ? '?' + qs.toString() : ''}`, { timeoutMs: 20_000 });
+}

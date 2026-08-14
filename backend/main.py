@@ -23,6 +23,7 @@ from .scanner import (
     fetch_quotes,
     fetch_spreads,
 )
+from . import alphavantage
 from .sp500 import fetch_sp500_tickers
 
 logging.basicConfig(
@@ -286,6 +287,62 @@ async def filings(
     }
     _filings_cache[key] = (time.time(), response)
     return response
+
+
+# ── Alpha Vantage free endpoints ─────────────────────────────────────────────
+_av_movers_cache: tuple[float, dict] = (0.0, {})
+_AV_MOVERS_TTL = 1800.0
+
+_av_earnings_cache: tuple[float, list] = (0.0, [])
+_AV_EARNINGS_TTL = 3600.0
+
+
+@app.get("/api/market/movers")
+async def market_movers() -> dict:
+    """Top gainers, losers, and most-active US tickers (Alpha Vantage, EOD)."""
+    global _av_movers_cache
+    now = time.time()
+    if (now - _av_movers_cache[0]) < _AV_MOVERS_TTL:
+        return _av_movers_cache[1]
+    try:
+        loop = asyncio.get_event_loop()
+        data = await loop.run_in_executor(None, alphavantage.top_gainers_losers)
+    except Exception as exc:  # noqa: BLE001
+        log.exception("Movers fetch failed")
+        raise HTTPException(500, f"Movers fetch failed: {exc}") from exc
+    response = {"generated_at": datetime.now(timezone.utc).isoformat(), **data}
+    _av_movers_cache = (time.time(), response)
+    return response
+
+
+@app.get("/api/market/earnings")
+async def market_earnings(
+    tickers: Optional[str] = Query(None, description="Filter to these tickers (comma-sep). Omit for full calendar."),
+) -> dict:
+    """Upcoming earnings dates (Alpha Vantage, 3-month horizon). Critical for
+    spread traders: avoid entering 0DTE spreads on earnings days."""
+    global _av_earnings_cache
+    now = time.time()
+    if (now - _av_earnings_cache[0]) < _AV_EARNINGS_TTL:
+        all_rows = _av_earnings_cache[1]
+    else:
+        try:
+            loop = asyncio.get_event_loop()
+            all_rows = await loop.run_in_executor(None, alphavantage.earnings_calendar)
+        except Exception as exc:  # noqa: BLE001
+            log.exception("Earnings fetch failed")
+            raise HTTPException(500, f"Earnings fetch failed: {exc}") from exc
+        _av_earnings_cache = (time.time(), all_rows)
+    if tickers:
+        syms = {t.strip().upper() for t in tickers.split(",") if t.strip()}
+        rows = [r for r in all_rows if (r.get("symbol") or "").upper() in syms]
+    else:
+        rows = all_rows
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "count": len(rows),
+        "earnings": rows[:200],
+    }
 
 
 @app.get("/api/replay/day")

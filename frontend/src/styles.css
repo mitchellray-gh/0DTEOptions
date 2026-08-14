@@ -906,6 +906,16 @@ tr.coaching-row:hover td {
 .rh-news img { width: 74px; height: 74px; object-fit: cover; border-radius: 10px; flex-shrink: 0; background: var(--panel-2); }
 .rh-news-ticker { display: inline-block; background: var(--panel-2); color: var(--accent); font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 6px; margin-right: 4px; }
 
+/* AV sentiment badge */
+.rh-sentiment { display: inline-block; font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 6px; margin-left: 6px; background: var(--panel-2); color: var(--muted); }
+.rh-sentiment--bullish,.rh-sentiment--somewhat-bullish { background: rgba(0,200,5,0.16); color: var(--up); }
+.rh-sentiment--bearish,.rh-sentiment--somewhat-bearish { background: rgba(255,80,0,0.16); color: var(--down); }
+.rh-sentiment--neutral { background: var(--panel-2); color: var(--muted); }
+
+/* Earnings warning */
+.rh-earnings-warn { display: flex; gap: 10px; align-items: center; background: rgba(255,179,64,0.12); border: 1px solid rgba(255,179,64,0.35); border-radius: 12px; padding: 12px 14px; margin-bottom: 12px; font-size: 13px; color: var(--warn); }
+.rh-earnings-warn .ico { font-size: 18px; flex-shrink: 0; }
+
 /* Investor filings (SEC EDGAR) */
 .rh-filings-head { font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; margin: 18px 0 8px; }
 .rh-filing { display: flex; align-items: center; gap: 12px; padding: 12px 2px; border-bottom: 1px solid var(--border); text-decoration: none; color: var(--fg); }

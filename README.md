@@ -104,6 +104,13 @@ uvicorn backend.main:app --reload --port 8000
 > ```
 > Vercel doesn't need this.
 
+> **Alpha Vantage enhanced data (free key, optional).** Set `AV_API_KEY` in your
+> `.env` (local, gitignored) or as a Vercel environment variable to unlock:
+> AI-sentiment-scored news (replaces Yahoo search), real US top gainers/losers,
+> and earnings-date warnings on every instrument page.
+> Free key: https://www.alphavantage.co/support/#api-key (25 req/day).
+> The app gracefully degrades to Yahoo-only if the key isn't set.
+
 > **Option chains come from CBOE first.** For option chains the app uses CBOE's
 > free ~15-min-delayed feed (`backend/cboe.py`) — real exchange **bid/ask, IV,
 > and greeks** (delta/gamma/theta/vega), richer than yfinance's scraped chain —

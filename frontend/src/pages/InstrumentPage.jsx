@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useOutletContext, useParams } from 'react-router-dom';
 import PriceChart from '../components/PriceChart.jsx';
 import NewsFeed from '../components/NewsFeed.jsx';
-import { fetchChains, fetchHistory } from '../api.js';
+import { fetchChains, fetchHistory, fetchEarnings } from '../api.js';
 import { scanChains } from '../lib/scanner.js';
 import { buyToOpen, loadPaper } from '../lib/paper.js';
 import { fmt$, fmtPct } from '../lib/format.js';
@@ -24,8 +24,17 @@ export default function InstrumentPage() {
   const [selectedId, setSelectedId] = useState(null);
   const [qty, setQty] = useState(1);
   const [toast, setToast] = useState(null);
+  const [upcomingEarnings, setUpcomingEarnings] = useState([]);
 
   const q = quotes[sym];
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchEarnings([sym])
+      .then((d) => { if (!cancelled) setUpcomingEarnings((d.earnings || []).slice(0, 1)); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [sym]);
 
   useEffect(() => {
     let cancelled = false;
@@ -89,6 +98,19 @@ export default function InstrumentPage() {
           </div>
         )}
       </div>
+
+      {upcomingEarnings.length > 0 && (
+        <div className="rh-earnings-warn">
+          <span className="ico">⚠️</span>
+          <span>
+            <strong>Earnings risk:</strong> {sym} reports on{' '}
+            <strong>{upcomingEarnings[0].reportDate}</strong>
+            {upcomingEarnings[0].timeOfTheDay ? ` (${upcomingEarnings[0].timeOfTheDay})` : ''}.
+            {' '}Avoid entering 0DTE spreads on or the day before earnings — IV spikes
+            and gap moves can blow through your short strike instantly.
+          </span>
+        </div>
+      )}
 
       <PriceChart bars={hist?.bars} prevClose={range === '1d' ? prevClose : null} />
       <div className="rh-range-row">

@@ -72,7 +72,14 @@ export default function NewsFeed({ tickers, limit = 20, showTickers = true, empt
           rel="noreferrer noopener"
         >
           <div className="rh-news-body">
-            <div className="rh-news-src">{item.publisher}</div>
+            <div className="rh-news-src">
+              {item.publisher}
+              {item.sentiment_label && (
+                <span className={`rh-sentiment rh-sentiment--${(item.sentiment_label || '').toLowerCase().replace(/[^a-z]/g, '-')}`}>
+                  {item.sentiment_label}
+                </span>
+              )}
+            </div>
             <div className="rh-news-title">{item.title}</div>
             <div className="rh-news-meta">
               {showTickers && (item.tickers || []).map((t) => (

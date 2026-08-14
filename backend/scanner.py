@@ -35,6 +35,7 @@ import yfinance as yf
 from . import yahoo
 from . import edgar
 from . import cboe
+from . import alphavantage
 from .models import Opportunity, RejectedContract, TradePlan
 from .pricing import bs_greeks, bs_price, implied_vol
 from .sp500 import fetch_sp500_tickers
@@ -811,17 +812,50 @@ def fetch_intraday_for_date(ticker: str, date_iso: str) -> dict:
 
 
 def fetch_news(tickers: list[str], limit: int = 20) -> tuple[list[dict], list[str]]:
-    """Aggregate recent news headlines for the given tickers via Yahoo search.
+    """Aggregate recent news headlines for the given tickers.
+
+    Primary: Alpha Vantage NEWS_SENTIMENT (real sentiment scores, high relevance).
+    Fallback: Yahoo Finance search endpoint (when AV key isn't configured).
 
     Returns ``(items, notes)``. Each item::
-
-        {uuid, title, publisher, link, published_at, thumbnail, tickers[]}
+        {uuid, title, publisher, link, published_at, thumbnail, tickers[],
+         sentiment_label, sentiment_score}
     """
-    items: list[dict] = []
+    # ── Alpha Vantage primary path ──────────────────────────────────────────
+    try:
+        av_items = alphavantage.news_sentiment(tickers, limit=limit)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("AV news failed, falling back to Yahoo: %s", exc)
+        av_items = []
+
+    if av_items:
+        # Normalise to the app's news shape (add uuid, link alias, etc.)
+        items: list[dict] = []
+        seen: set[str] = set()
+        for a in av_items:
+            uid = a.get("url") or a.get("title", "")
+            if uid in seen:
+                continue
+            seen.add(uid)
+            ticker_tags = [t["ticker"] for t in (a.get("ticker_sentiment") or [])
+                           if t.get("ticker")]
+            items.append({
+                "uuid": uid,
+                "title": a["title"],
+                "publisher": a.get("source", ""),
+                "link": a.get("url", ""),
+                "published_at": a.get("time_published", ""),
+                "thumbnail": a.get("banner_image"),
+                "tickers": ticker_tags or tickers[:1],
+                "sentiment_label": a.get("overall_sentiment_label", ""),
+                "sentiment_score": a.get("overall_sentiment_score", 0),
+            })
+        return items[:limit], []
+
+    # ── Yahoo fallback ──────────────────────────────────────────────────────
+    items = []
     notes: list[str] = []
     seen: set[str] = set()
-
-    # Fetch each ticker's headlines in parallel, then merge deterministically.
     raw_by_ticker: dict[str, list] = {}
     workers = min(_MAX_WORKERS, max(len(tickers), 1))
 
@@ -844,17 +878,13 @@ def fetch_news(tickers: list[str], limit: int = 20) -> tuple[list[dict], list[st
             title = content.get("title") or entry.get("title")
             if not title:
                 continue
-            # Link
             link = (entry.get("link")
                     or (content.get("canonicalUrl") or {}).get("url")
                     or (content.get("clickThroughUrl") or {}).get("url"))
-            # Publisher
             publisher = (entry.get("publisher")
                          or (content.get("provider") or {}).get("displayName")
                          or "")
-            # Published time
-            published = (content.get("pubDate")
-                         or content.get("displayTime"))
+            published = (content.get("pubDate") or content.get("displayTime"))
             if published is None and entry.get("providerPublishTime"):
                 try:
                     published = datetime.fromtimestamp(
@@ -862,7 +892,6 @@ def fetch_news(tickers: list[str], limit: int = 20) -> tuple[list[dict], list[st
                     ).isoformat()
                 except Exception:
                     published = None
-            # Thumbnail
             thumb = None
             tn = entry.get("thumbnail") or content.get("thumbnail")
             if isinstance(tn, dict):
@@ -872,7 +901,6 @@ def fetch_news(tickers: list[str], limit: int = 20) -> tuple[list[dict], list[st
                 thumb = thumb or tn.get("originalUrl")
             uid = entry.get("uuid") or content.get("id") or link or title
             if uid in seen:
-                # Same story surfaced by two tickers — tag both.
                 for it in items:
                     if it["uuid"] == uid and ticker not in it["tickers"]:
                         it["tickers"].append(ticker)
@@ -886,9 +914,10 @@ def fetch_news(tickers: list[str], limit: int = 20) -> tuple[list[dict], list[st
                 "published_at": published,
                 "thumbnail": thumb,
                 "tickers": [ticker],
+                "sentiment_label": "",
+                "sentiment_score": 0,
             })
 
-    # Newest first when we have parseable timestamps.
     def _key(it):
         return it.get("published_at") or ""
     items.sort(key=_key, reverse=True)
