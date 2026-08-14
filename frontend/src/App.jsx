@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Routes, Route, useLocation, Outlet } from 'react-router-dom';
 import BottomNav from './components/BottomNav.jsx';
+import ErrorBoundary from './components/ErrorBoundary.jsx';
 import { useLiveQuotes } from './lib/useLiveQuotes.js';
 import InvestPage from './pages/InvestPage.jsx';
 import InstrumentPage from './pages/InstrumentPage.jsx';
@@ -52,7 +53,9 @@ function Shell({ ctx }) {
           <span className="dot" /> {fresh ? 'LIVE' : 'idle'} · {stamp}
         </span>
       </div>
-      <Outlet context={ctx} />
+      <ErrorBoundary routeKey={location.pathname}>
+        <Outlet context={ctx} />
+      </ErrorBoundary>
       <BottomNav />
     </div>
   );

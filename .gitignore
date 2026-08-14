@@ -49,3 +49,10 @@ desktop.ini
 # ── Type-checker caches ───────────────────────────────────────────────────────
 .mypy_cache/
 .pyright/
+
+# Databento raw data (large, licensed - never commit)
+Databento/
+*.dbn
+*.dbn.zst
+condition.json
+metadata.json

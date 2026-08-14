@@ -36,7 +36,7 @@ export default function DiscoverPage() {
     <div className="rh-page">
       <h3>Analytics</h3>
       <div className="rh-stats">
-        <div className="rh-stat"><div className="k">Gainers</div><div className="v up-fg">{gainers}</div></div>
+        <div className="rh-stat"><div className="k">Gainers</div><div className="v up-fg">{watchlistStats.gainers}</div></div>
         <div className="rh-stat"><div className="k">Losers</div><div className="v down-fg">{watchlistStats.losers}</div></div>
         <div className="rh-stat"><div className="k">Watchlist bias</div><div className="v" style={{ color: watchlistStats.sentiment >= 0 ? 'var(--up)' : 'var(--down)' }}>{watchlistStats.sentiment >= 0 ? 'Bullish' : 'Bearish'}</div></div>
         <div className="rh-stat"><div className="k">Tracking</div><div className="v">{watchlist.length}</div></div>
