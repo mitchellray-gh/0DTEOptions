@@ -56,3 +56,4 @@ Databento/
 *.dbn.zst
 condition.json
 metadata.json
+Databento/cache/

@@ -65,50 +65,71 @@ def _derive_spot(rows_by_type_strike: dict) -> float | None:
     return best[1] if best else None
 
 
-def _load_snapshot(path: str, entry_minute: str, file_date: dt.date):
-    """Return (entry_chain_rows, entry_spot, close_spot, minutes_to_expiry).
+def _cache_path(path: str) -> str:
+    """Compact per-day 0DTE cache next to the raw file (fast re-runs)."""
+    base = os.path.basename(path).replace(".dbn.zst", "")
+    cache_dir = os.path.join(os.path.dirname(path), "cache")
+    os.makedirs(cache_dir, exist_ok=True)
+    return os.path.join(cache_dir, f"{base}.0dte.parquet")
 
-    entry_chain_rows: {"calls": [...], "puts": [...]} with real bid/ask + a
-    back-solved impliedVolatility, ready for build_credit_spreads.
+
+def _load_0dte_frame(path: str, file_date: dt.date):
+    """Decode a day's file to a COMPACT 0DTE frame and cache it as parquet.
+
+    The raw cbbo-1m file is ~5.6M rows; the 0DTE slice is ~80k. We cache that
+    slice so re-running the backtest at any entry time / gate is near-instant.
+    Returns a DataFrame with columns: symbol, _ptype, _strike, bid, ask, _mid, _hm.
     """
-    import databento as db
+    import pandas as pd
 
+    cache = _cache_path(path)
+    if os.path.exists(cache):
+        return pd.read_parquet(cache)
+
+    import databento as db
     store = db.DBNStore.from_file(path)
     df = store.to_df()
     if df.empty:
         return None
 
-    # Parse every symbol once; keep only 0DTE (expiry == the file's date).
-    # Map on the frame's own column (avoids pandas index-alignment issues with
-    # the duplicate ts_recv timestamps in cbbo-1m).
     parsed = df["symbol"].map(_parse_osi)
-    df = df.assign(
-        _parsed=parsed.values,
-    )
+    df = df.assign(_parsed=parsed.values)
     df = df[df["_parsed"].map(lambda p: p is not None and p[1] == file_date)].copy()
     if df.empty:
         return None
     df["_ptype"] = df["_parsed"].map(lambda p: p[2])
     df["_strike"] = df["_parsed"].map(lambda p: p[3])
-    # Mid from real NBBO; drop crossed/empty quotes.
     df["_mid"] = (df["bid_px_00"] + df["ask_px_00"]) / 2.0
     df = df[(df["bid_px_00"] > 0) & (df["ask_px_00"] > 0) &
             (df["ask_px_00"] >= df["bid_px_00"])]
     if df.empty:
         return None
+    df["_hm"] = [f"{t.hour:02d}:{t.minute:02d}" for t in df.index]
+    out = df[["symbol", "_ptype", "_strike", "bid_px_00", "ask_px_00", "_mid", "_hm"]].copy()
+    out = out.rename(columns={"bid_px_00": "bid", "ask_px_00": "ask"})
+    try:
+        out.to_parquet(cache, index=False)
+    except Exception:
+        pass  # caching is best-effort
+    return out
 
-    # Index is ts_recv (tz-aware UTC). Bucket to HH:MM.
-    ts = df.index
-    df["_hm"] = [f"{t.hour:02d}:{t.minute:02d}" for t in ts]
 
-    # ── Entry snapshot at the requested minute (or first minute >= entry) ──
+def _load_snapshot(path: str, entry_minute: str, file_date: dt.date):
+    """Return the entry chain + entry/close spot for one day.
+
+    entry_chain_rows: {"calls": [...], "puts": [...]} with real bid/ask + a
+    back-solved impliedVolatility, ready for build_credit_spreads.
+    """
+    df = _load_0dte_frame(path, file_date)
+    if df is None or df.empty:
+        return None
+
     minutes_sorted = sorted(set(df["_hm"]))
     entry_hm = next((m for m in minutes_sorted if m >= entry_minute), None)
     if entry_hm is None:
         return None
     entry = df[df["_hm"] == entry_hm]
-    # Settlement close: the last quoted minute AT OR BEFORE 16:00 ET (20:00 UTC),
-    # not stray post-market prints which are often one-sided.
+    # Settlement close: last quoted minute AT OR BEFORE 16:00 ET (20:00 UTC).
     pre_close = [m for m in minutes_sorted if m <= "20:00"]
     close_hm = pre_close[-1] if pre_close else minutes_sorted[-1]
     close = df[df["_hm"] == close_hm]
@@ -138,10 +159,10 @@ def _load_snapshot(path: str, entry_minute: str, file_date: dt.date):
         row = {
             "contractSymbol": str(r["symbol"]).strip(),
             "strike": K,
-            "bid": float(r["bid_px_00"]),
-            "ask": float(r["ask_px_00"]),
+            "bid": float(r["bid"]),
+            "ask": float(r["ask"]),
             "lastPrice": mid,
-            "volume": int(r.get("size", 0) or 0),
+            "volume": 0,
             "openInterest": 1000,  # cbbo has no OI; not used by the gate
             "impliedVolatility": iv,
         }
@@ -206,6 +227,52 @@ def run(data_dir: str, *, entry_minute: str, min_pop: float, max_width: float,
     return trades, day_lines
 
 
+def _summ(trades: list) -> dict:
+    if not trades:
+        return {"n": 0, "win": 0.0, "net": 0.0, "pf": 0.0}
+    wins = [t for t in trades if t[6] == "win"]
+    net = sum(t[5] for t in trades)
+    gw = sum(t[5] for t in wins)
+    gl = abs(sum(t[5] for t in trades if t[6] == "loss"))
+    return {
+        "n": len(trades),
+        "win": len(wins) / len(trades),
+        "net": net,
+        "pf": float("inf") if gl == 0 else gw / gl,
+    }
+
+
+def sweep(data_dir: str, *, account_size: float, risk_pct: float, max_per_day: int):
+    """Grid over entry time × POP × width on the REAL data (cached, fast).
+
+    Finds which gate actually triggers enough trades AND stays profitable on
+    genuine OPRA quotes — the empirical answer to 'is this tradable?'.
+    """
+    entries = ["13:35", "14:00", "14:30", "15:00", "15:30"]
+    pops = [0.70, 0.75, 0.80, 0.85, 0.90]
+    widths = [2.0, 5.0]
+    rows = []
+    for entry in entries:
+        for pop in pops:
+            for w in widths:
+                trades, _ = run(data_dir, entry_minute=entry, min_pop=pop,
+                                max_width=w, account_size=account_size,
+                                risk_pct=risk_pct, max_per_day=max_per_day)
+                s = _summ(trades)
+                rows.append((entry, pop, w, s))
+    # Rank by net, but only among configs with a usable sample (>=8 trades).
+    rows.sort(key=lambda r: (r[3]["n"] >= 8, r[3]["net"]), reverse=True)
+    print("=" * 72)
+    print("  REAL-DATA GATE SWEEP (Databento OPRA) — ranked by net (min 8 trades)")
+    print("=" * 72)
+    print(f"  {'entry':>6} {'POP':>5} {'width':>6} {'trades':>7} {'win%':>6} {'net$':>9} {'PF':>6}")
+    for entry, pop, w, s in rows[:20]:
+        pf = 'inf' if s['pf'] == float('inf') else f"{s['pf']:.2f}"
+        print(f"  {entry:>6} {pop:>5.2f} {w:>6.1f} {s['n']:>7} "
+              f"{s['win']*100:>5.1f} {s['net']:>9.2f} {pf:>6}")
+    return rows
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="python -m backend.databento_backtest")
     p.add_argument("--dir", default="Databento")
@@ -215,7 +282,14 @@ def main(argv=None) -> int:
     p.add_argument("--account-size", type=float, default=1000.0)
     p.add_argument("--risk-pct", type=float, default=0.05)
     p.add_argument("--max-per-day", type=int, default=2)
+    p.add_argument("--sweep", action="store_true",
+                   help="grid entry×POP×width to find the best real-data gate")
     a = p.parse_args(argv)
+
+    if a.sweep:
+        sweep(a.dir, account_size=a.account_size, risk_pct=a.risk_pct,
+              max_per_day=a.max_per_day)
+        return 0
 
     trades, day_lines = run(
         a.dir, entry_minute=a.entry, min_pop=a.min_pop, max_width=a.max_width,
